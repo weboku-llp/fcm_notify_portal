@@ -1,0 +1,33 @@
+{
+  "name": "@notif/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rimraf dist .turbo"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/sensible": "^6.0.2",
+    "@notif/config": "workspace:*",
+    "@notif/contracts": "workspace:*",
+    "@notif/db": "workspace:*",
+    "@notif/domain": "workspace:*",
+    "@notif/logger": "workspace:*",
+    "bullmq": "^5.34.5",
+    "fastify": "^5.2.0",
+    "ioredis": "^5.4.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

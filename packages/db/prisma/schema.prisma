@@ -1,0 +1,183 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  PAUSED
+}
+
+enum Platform {
+  ANDROID
+  IOS
+  WEB
+}
+
+enum CampaignMode {
+  BROADCAST_TOPIC
+  SEGMENT
+  SPECIFIC_TOKENS
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  QUEUED
+  SENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum DeliveryStatus {
+  SENT
+  FAILED
+  STALE
+}
+
+model Project {
+  id   String @id @default(cuid())
+  name String
+  slug String @unique
+
+  /// Encrypted at rest (AES-256-GCM). Never logged or returned in API responses.
+  fcmServiceAccountJson String
+  /// SHA-256 fingerprint of the plaintext service account, safe to display masked.
+  credentialFingerprint String
+  /// Firebase project_id parsed from the service account (safe to display).
+  fcmProjectId   String
+  /// Service-account client_email (safe to display).
+  fcmClientEmail String
+
+  defaultBroadcastTopic String        @default("broadcast")
+  androidChannelId      String?
+  status                ProjectStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deviceTokens DeviceToken[]
+  segments     Segment[]
+  templates    Template[]
+  campaigns    Campaign[]
+
+  @@index([status])
+}
+
+model DeviceToken {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  token     String
+  platform  Platform
+
+  userId     String?
+  locale     String?
+  appVersion String?
+  topics     String[] @default([])
+
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  deliveries CampaignDelivery[]
+
+  @@unique([projectId, token])
+  @@index([projectId, platform])
+  @@index([projectId, userId])
+}
+
+model Segment {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+
+  /// { platform?, locale?, topic?, lastSeenWithinDays?, customAttrs? }
+  rules Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaigns Campaign[]
+
+  @@index([projectId])
+}
+
+model Template {
+  id        String   @id @default(cuid())
+  /// null = global template usable by any project
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+
+  title    String
+  body     String
+  imageUrl String?
+  deepLink String?
+  dataJson Json     @default("{}")
+  /// e.g. ["firstName","matchName"] used as {{firstName}}
+  variables String[] @default([])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaigns Campaign[]
+
+  @@index([projectId])
+}
+
+model Campaign {
+  id         String       @id @default(cuid())
+  projectId  String
+  project    Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  templateId String?
+  template   Template?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  mode       CampaignMode
+
+  targetTopic  String?
+  segmentId    String?
+  segment      Segment?  @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  targetTokens String[]  @default([])
+
+  // Rendered snapshot of the content that will be sent.
+  title    String
+  body     String
+  imageUrl String?
+  deepLink String?
+  dataJson Json    @default("{}")
+
+  status      CampaignStatus @default(DRAFT)
+  scheduledAt DateTime?
+  timezone    String?
+
+  sentCount    Int       @default(0)
+  failedCount  Int       @default(0)
+  completedAt  DateTime?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries CampaignDelivery[]
+
+  @@index([projectId, status])
+  @@index([status, scheduledAt])
+}
+
+model CampaignDelivery {
+  id         String         @id @default(cuid())
+  campaignId String
+  campaign   Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  tokenId    String?
+  token      DeviceToken?   @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+  status     DeliveryStatus
+  error      String?
+  createdAt  DateTime       @default(now())
+
+  @@index([campaignId, status])
+}

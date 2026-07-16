@@ -1,0 +1,86 @@
+import { z } from "zod";
+import { CampaignMode, CampaignStatus } from "./enums.js";
+
+/** The notification payload fields shared by templates and campaigns. */
+export const NotificationContent = z.object({
+  title: z.string().min(1).max(500),
+  body: z.string().min(1).max(4000),
+  imageUrl: z.string().url().nullable().optional(),
+  deepLink: z.string().max(2000).nullable().optional(),
+  dataJson: z.record(z.string()).default({}),
+});
+export type NotificationContent = z.infer<typeof NotificationContent>;
+
+/**
+ * Create a campaign. `action` decides whether it is stored as a draft,
+ * scheduled for later, or sent immediately.
+ */
+export const CreateCampaignInput = z
+  .object({
+    action: z.enum(["draft", "schedule", "send_now"]).default("draft"),
+    mode: CampaignMode,
+    templateId: z.string().nullable().optional(),
+    // Content can be provided inline or (later) resolved from a template.
+    title: z.string().min(1).max(500),
+    body: z.string().min(1).max(4000),
+    imageUrl: z.string().url().nullable().optional(),
+    deepLink: z.string().max(2000).nullable().optional(),
+    dataJson: z.record(z.string()).default({}),
+    // Targeting
+    targetTopic: z.string().min(1).max(200).nullable().optional(),
+    segmentId: z.string().nullable().optional(),
+    targetTokens: z.array(z.string().min(1)).max(100_000).optional(),
+    // Scheduling
+    scheduledAt: z.string().datetime().nullable().optional(),
+    timezone: z.string().max(64).nullable().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.mode === "BROADCAST_TOPIC" && !val.targetTopic) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["targetTopic"], message: "targetTopic is required for BROADCAST_TOPIC" });
+    }
+    if (val.mode === "SEGMENT" && !val.segmentId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["segmentId"], message: "segmentId is required for SEGMENT" });
+    }
+    if (val.mode === "SPECIFIC_TOKENS" && (!val.targetTokens || val.targetTokens.length === 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["targetTokens"], message: "targetTokens is required for SPECIFIC_TOKENS" });
+    }
+    if (val.action === "schedule" && !val.scheduledAt) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["scheduledAt"], message: "scheduledAt is required when action=schedule" });
+    }
+  });
+export type CreateCampaignInput = z.infer<typeof CreateCampaignInput>;
+
+export const TestSendInput = z.object({
+  token: z.string().min(1),
+  title: z.string().min(1).max(500),
+  body: z.string().min(1).max(4000),
+  imageUrl: z.string().url().nullable().optional(),
+  deepLink: z.string().max(2000).nullable().optional(),
+  dataJson: z.record(z.string()).default({}),
+});
+export type TestSendInput = z.infer<typeof TestSendInput>;
+
+export const CampaignPublic = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  templateId: z.string().nullable(),
+  mode: CampaignMode,
+  targetTopic: z.string().nullable(),
+  segmentId: z.string().nullable(),
+  targetTokens: z.array(z.string()),
+  title: z.string(),
+  body: z.string(),
+  imageUrl: z.string().nullable(),
+  deepLink: z.string().nullable(),
+  dataJson: z.record(z.string()),
+  status: CampaignStatus,
+  scheduledAt: z.string().nullable(),
+  timezone: z.string().nullable(),
+  sentCount: z.number(),
+  failedCount: z.number(),
+  completedAt: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type CampaignPublic = z.infer<typeof CampaignPublic>;

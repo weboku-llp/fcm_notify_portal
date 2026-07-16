@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: notif_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: notif
+      POSTGRES_PASSWORD: notif
+      POSTGRES_DB: notif_portal
+    ports:
+      - "5432:5432"
+    volumes:
+      - notif_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notif -d notif_portal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: notif_redis
+    restart: unless-stopped
+    ports:
+      # Host port 6380 avoids clashing with a local Redis already on 6379.
+      - "6380:6379"
+    volumes:
+      - notif_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  notif_pgdata:
+  notif_redisdata:

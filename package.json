@@ -1,0 +1,32 @@
+{
+  "name": "notif-portal",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean",
+    "db:generate": "pnpm --filter @notif/db generate",
+    "db:migrate": "pnpm --filter @notif/db migrate",
+    "db:push": "pnpm --filter @notif/db push",
+    "db:seed": "pnpm --filter @notif/db seed",
+    "db:studio": "pnpm --filter @notif/db studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2",
+    "@types/node": "^20.17.10",
+    "tsx": "^4.19.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "ioredis": "5.10.1"
+    }
+  }
+}
