@@ -1,0 +1,20 @@
+name: notif_portal_fcm
+description: CricRumble / Notif Portal FCM device registration helper.
+version: 0.1.0
+publish_to: "none"
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  firebase_core: ^3.8.0
+  firebase_messaging: ^15.1.5
+  http: ^1.2.2
+  package_info_plus: ^8.1.1
+  shared_preferences: ^2.3.3
+
+dev_dependencies:
+  flutter_lints: ^5.0.0

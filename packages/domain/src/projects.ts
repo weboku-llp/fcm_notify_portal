@@ -7,34 +7,32 @@ import {
 } from "@notif/contracts";
 import { prisma, type Project } from "@notif/db";
 import { encryptServiceAccount, maskFingerprint } from "@notif/crypto";
+import { writeAuditLog } from "./audit.js";
+import { DomainError } from "./errors.js";
 import { getFcmSender } from "./fcm/index.js";
+import { countActiveDevices, hashRegistrationSecret } from "./tokens.js";
+
+export { DomainError };
 
 /** Map a DB row to the public shape. The service-account ciphertext is dropped. */
-export function toPublicProject(p: Project): ProjectPublic {
+export function toPublicProject(p: Project, activeDeviceCount?: number): ProjectPublic {
   return {
     id: p.id,
     name: p.name,
     slug: p.slug,
+    projectKey: p.slug,
     fcmProjectId: p.fcmProjectId,
+    fcmAppId: p.fcmAppId,
     fcmClientEmail: p.fcmClientEmail,
     credentialFingerprint: maskFingerprint(p.credentialFingerprint),
     defaultBroadcastTopic: p.defaultBroadcastTopic,
     androidChannelId: p.androidChannelId,
     status: p.status,
+    hasRegistrationSecret: Boolean(p.registrationSecretHash),
+    activeDeviceCount,
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
   };
-}
-
-export class DomainError extends Error {
-  constructor(
-    message: string,
-    readonly code: string,
-    readonly statusCode = 400,
-  ) {
-    super(message);
-    this.name = "DomainError";
-  }
 }
 
 /** Validate a raw (already zod-parsed) service account by minting a token. */
@@ -69,17 +67,30 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectP
       fcmServiceAccountJson: enc.ciphertext,
       credentialFingerprint: enc.credentialFingerprint,
       fcmProjectId: enc.fcmProjectId,
+      fcmAppId: input.fcmAppId ?? null,
       fcmClientEmail: enc.fcmClientEmail,
       defaultBroadcastTopic: input.defaultBroadcastTopic,
       androidChannelId: input.androidChannelId ?? null,
+      registrationSecretHash: input.registrationSecret
+        ? hashRegistrationSecret(input.registrationSecret)
+        : null,
     },
   });
-  return toPublicProject(project);
+
+  await writeAuditLog({
+    projectId: project.id,
+    action: "PROJECT_CREATED",
+    summary: `Created project ${project.name} (${project.slug})`,
+    metadata: { fcmProjectId: project.fcmProjectId, defaultBroadcastTopic: project.defaultBroadcastTopic },
+  });
+
+  return toPublicProject(project, 0);
 }
 
 export async function listProjects(): Promise<ProjectPublic[]> {
   const rows = await prisma.project.findMany({ orderBy: { createdAt: "desc" } });
-  return rows.map(toPublicProject);
+  const counts = await Promise.all(rows.map((p) => countActiveDevices(p.id)));
+  return rows.map((p, i) => toPublicProject(p, counts[i]));
 }
 
 export async function getProjectOrThrow(id: string): Promise<Project> {
@@ -88,8 +99,15 @@ export async function getProjectOrThrow(id: string): Promise<Project> {
   return project;
 }
 
+export async function getProjectByKeyOrThrow(projectKey: string): Promise<Project> {
+  const project = await prisma.project.findUnique({ where: { slug: projectKey } });
+  if (!project) throw new DomainError(`Project key ${projectKey} not found`, "NOT_FOUND", 404);
+  return project;
+}
+
 export async function getProjectPublic(id: string): Promise<ProjectPublic> {
-  return toPublicProject(await getProjectOrThrow(id));
+  const project = await getProjectOrThrow(id);
+  return toPublicProject(project, await countActiveDevices(project.id));
 }
 
 export async function updateProject(id: string, input: UpdateProjectInput): Promise<ProjectPublic> {
@@ -99,7 +117,13 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
   if (input.name !== undefined) data.name = input.name;
   if (input.defaultBroadcastTopic !== undefined) data.defaultBroadcastTopic = input.defaultBroadcastTopic;
   if (input.androidChannelId !== undefined) data.androidChannelId = input.androidChannelId;
+  if (input.fcmAppId !== undefined) data.fcmAppId = input.fcmAppId;
   if (input.status !== undefined) data.status = input.status;
+  if (input.registrationSecret !== undefined) {
+    data.registrationSecretHash = input.registrationSecret
+      ? hashRegistrationSecret(input.registrationSecret)
+      : null;
+  }
 
   if (input.fcmServiceAccountJson !== undefined) {
     const check = await testServiceAccount(input.fcmServiceAccountJson);
@@ -114,5 +138,11 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
   }
 
   const updated = await prisma.project.update({ where: { id }, data });
-  return toPublicProject(updated);
+  await writeAuditLog({
+    projectId: updated.id,
+    action: "PROJECT_UPDATED",
+    summary: `Updated project ${updated.name}`,
+    metadata: { fields: Object.keys(data) },
+  });
+  return toPublicProject(updated, await countActiveDevices(updated.id));
 }

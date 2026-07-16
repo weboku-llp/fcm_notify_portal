@@ -2,9 +2,14 @@ import { loadDbEnv } from "@notif/config";
 import { ServiceAccountSchema } from "@notif/contracts";
 import { encryptServiceAccount } from "@notif/crypto";
 import { prisma, type Prisma } from "@notif/db";
+import { createHash } from "node:crypto";
 
 // Validate + load env (DATABASE_URL, PORTAL_ENCRYPTION_KEY).
 loadDbEnv();
+
+function hashSecret(secret: string): string {
+  return createHash("sha256").update(secret, "utf8").digest("hex");
+}
 
 /**
  * Build a structurally-valid (but fake) service account. These pass zod
@@ -29,6 +34,7 @@ function fakeServiceAccount(projectId: string) {
 }
 
 async function reset(): Promise<void> {
+  await prisma.auditLog.deleteMany();
   await prisma.campaignDelivery.deleteMany();
   await prisma.campaign.deleteMany();
   await prisma.template.deleteMany();
@@ -41,24 +47,39 @@ interface DemoProject {
   name: string;
   slug: string;
   fcmProjectId: string;
+  fcmAppId: string;
   defaultBroadcastTopic: string;
   androidChannelId: string;
+  registrationSecret: string;
 }
 
 const demoProjects: DemoProject[] = [
   {
+    name: "CricRumble",
+    slug: "cricrumble",
+    fcmProjectId: "cricrumble-fcm",
+    fcmAppId: "1:000000000000:android:cricrumbledemo",
+    defaultBroadcastTopic: "cricrumble_all",
+    androidChannelId: "cricrumble_alerts",
+    registrationSecret: "cricrumble-dev-registration-secret",
+  },
+  {
     name: "Acme Sports",
     slug: "acme-sports",
     fcmProjectId: "acme-sports-fcm",
+    fcmAppId: "1:111111111111:android:acmedemo",
     defaultBroadcastTopic: "all-users",
     androidChannelId: "sports_alerts",
+    registrationSecret: "acme-dev-registration-secret",
   },
   {
     name: "Nimbus Weather",
     slug: "nimbus-weather",
     fcmProjectId: "nimbus-weather-fcm",
+    fcmAppId: "1:222222222222:android:nimbusdemo",
     defaultBroadcastTopic: "weather-alerts",
     androidChannelId: "weather_alerts",
+    registrationSecret: "nimbus-dev-registration-secret",
   },
 ];
 
@@ -76,21 +97,71 @@ async function main(): Promise<void> {
         fcmServiceAccountJson: enc.ciphertext,
         credentialFingerprint: enc.credentialFingerprint,
         fcmProjectId: enc.fcmProjectId,
+        fcmAppId: p.fcmAppId,
         fcmClientEmail: enc.fcmClientEmail,
         defaultBroadcastTopic: p.defaultBroadcastTopic,
         androidChannelId: p.androidChannelId,
+        registrationSecretHash: hashSecret(p.registrationSecret),
       },
     });
     count++;
     console.log(`  + project ${project.name} (${project.slug}) -> fcm ${project.fcmProjectId}`);
+    console.log(`    topic=${project.defaultBroadcastTopic} regSecret(dev)=${p.registrationSecret}`);
 
-    // Device tokens, including one "stale-" token to demo pruning on send.
     await prisma.deviceToken.createMany({
       data: [
-        { projectId: project.id, token: `tok-${p.slug}-android-1`, platform: "ANDROID", locale: "en-US", topics: ["all-users"] },
-        { projectId: project.id, token: `tok-${p.slug}-ios-1`, platform: "IOS", locale: "en-GB", topics: ["all-users"] },
-        { projectId: project.id, token: `tok-${p.slug}-web-1`, platform: "WEB", locale: "de-DE", topics: [] },
-        { projectId: project.id, token: `stale-${p.slug}-1`, platform: "ANDROID", locale: "en-US", topics: [] },
+        {
+          projectId: project.id,
+          projectKey: project.slug,
+          firebaseProjectId: project.fcmProjectId,
+          firebaseAppId: project.fcmAppId,
+          token: `tok-${p.slug}-android-1`,
+          platform: "ANDROID",
+          locale: "en-US",
+          topics: [p.defaultBroadcastTopic],
+          topicSubscriptionStatus: "SUBSCRIBED",
+          notificationPermission: "GRANTED",
+          isActive: true,
+        },
+        {
+          projectId: project.id,
+          projectKey: project.slug,
+          firebaseProjectId: project.fcmProjectId,
+          firebaseAppId: project.fcmAppId,
+          token: `tok-${p.slug}-ios-1`,
+          platform: "IOS",
+          locale: "en-GB",
+          topics: [p.defaultBroadcastTopic],
+          topicSubscriptionStatus: "SUBSCRIBED",
+          notificationPermission: "GRANTED",
+          isActive: true,
+        },
+        {
+          projectId: project.id,
+          projectKey: project.slug,
+          firebaseProjectId: project.fcmProjectId,
+          firebaseAppId: project.fcmAppId,
+          token: `tok-${p.slug}-web-1`,
+          platform: "WEB",
+          locale: "de-DE",
+          topics: [],
+          topicSubscriptionStatus: "UNKNOWN",
+          notificationPermission: "UNKNOWN",
+          isActive: true,
+        },
+        {
+          projectId: project.id,
+          projectKey: project.slug,
+          firebaseProjectId: project.fcmProjectId,
+          firebaseAppId: project.fcmAppId,
+          token: `stale-${p.slug}-1`,
+          platform: "ANDROID",
+          locale: "en-US",
+          topics: [],
+          topicSubscriptionStatus: "UNKNOWN",
+          notificationPermission: "GRANTED",
+          isActive: true,
+        },
       ],
     });
 
@@ -105,16 +176,27 @@ async function main(): Promise<void> {
     await prisma.template.create({
       data: {
         projectId: project.id,
-        name: "Welcome",
-        title: "Welcome, {{firstName}}!",
-        body: "Thanks for joining {{appName}}. Enjoy the ride.",
-        dataJson: { screen: "home" } as Prisma.InputJsonValue,
-        variables: ["firstName", "appName"],
+        name: p.slug === "cricrumble" ? "Match Starting" : "Welcome",
+        title:
+          p.slug === "cricrumble" ? "{{teamA}} vs {{teamB}}" : "Welcome, {{firstName}}!",
+        body:
+          p.slug === "cricrumble"
+            ? "Live action starts at {{matchTime}}. Open CricRumble now."
+            : "Thanks for joining {{appName}}. Enjoy the ride.",
+        imageUrl: p.slug === "cricrumble" ? "{{imageUrl}}" : null,
+        deepLink: p.slug === "cricrumble" ? "/matches/{{matchId}}" : null,
+        dataJson:
+          p.slug === "cricrumble"
+            ? ({ type: "MATCH_START", matchId: "{{matchId}}", deepLink: "/matches/{{matchId}}" } as Prisma.InputJsonValue)
+            : ({ screen: "home" } as Prisma.InputJsonValue),
+        variables:
+          p.slug === "cricrumble"
+            ? ["teamA", "teamB", "matchTime", "imageUrl", "matchId"]
+            : ["firstName", "appName"],
       },
     });
   }
 
-  // A global template shared by all projects.
   await prisma.template.create({
     data: {
       projectId: null,

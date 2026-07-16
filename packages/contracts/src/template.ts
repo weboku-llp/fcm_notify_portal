@@ -5,7 +5,8 @@ export const CreateTemplateInput = z.object({
   name: z.string().min(1).max(120),
   title: z.string().min(1).max(500),
   body: z.string().min(1).max(4000),
-  imageUrl: z.string().url().nullable().optional(),
+  /// May be a real URL or a template expression such as {{imageUrl}}.
+  imageUrl: z.string().max(2000).nullable().optional(),
   deepLink: z.string().max(2000).nullable().optional(),
   dataJson: z.record(z.string()).default({}),
   variables: z.array(z.string().min(1).max(80)).max(50).default([]),

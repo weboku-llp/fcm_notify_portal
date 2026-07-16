@@ -1,87 +1,150 @@
 "use client";
 
+import { ArrowRight, Check, Loader2, Plus, Radio, Settings2 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { useProjects } from "@/components/ProjectContext";
+import { projectLogo } from "@/lib/brand";
 import { fmtDate } from "@/lib/ui";
 
 export default function ProjectsPage() {
   const { projects, loading, error, selected, selectProject } = useProjects();
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Projects</h1>
-          <p className="text-sm text-slate-500">
-            Each project maps to one Firebase project with its own encrypted service account.
+          <h1 className="text-[24px] font-semibold tracking-tight text-ink">Projects</h1>
+          <p className="mt-1 text-[13px] text-ink-mute">
+            Left: navigate the CMS. Right: manage each Firebase project’s credentials, templates, and sends.
           </p>
         </div>
         <Link href="/projects/new" className="btn-primary">
-          + Add project
+          <Plus className="h-3.5 w-3.5" />
+          Add project
         </Link>
       </div>
 
-      {error ? <div className="card border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div> : null}
-      {loading ? <p className="text-sm text-slate-500">Loading…</p> : null}
+      {error ? (
+        <div className="border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-800">{error}</div>
+      ) : null}
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-[13px] text-ink-mute">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading…
+        </div>
+      ) : null}
 
       {!loading && projects.length === 0 ? (
-        <div className="card p-10 text-center">
-          <p className="text-lg font-medium">No projects yet</p>
-          <p className="mt-1 text-sm text-slate-500">
-            Add your first Firebase project by pasting its service-account JSON.
-          </p>
-          <Link href="/projects/new" className="btn-primary mt-4">
-            + Add project
+        <div className="border border-dashed border-line bg-surface-card px-6 py-14 text-center">
+          <p className="text-[15px] font-medium text-ink">No Firebase projects linked</p>
+          <Link href="/projects/new" className="btn-primary mt-5">
+            <Plus className="h-3.5 w-3.5" />
+            Add project
           </Link>
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {projects.map((p) => (
-          <div key={p.id} className={`card p-5 ${selected?.id === p.id ? "ring-2 ring-brand-300" : ""}`}>
-            <div className="flex items-start justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">{p.name}</h2>
-                <p className="text-xs text-slate-500">/{p.slug}</p>
+      <div className="grid gap-3 xl:grid-cols-2">
+        {projects.map((p) => {
+          const isSelected = selected?.id === p.id;
+          const logo = projectLogo(p.slug);
+          const cric = p.slug === "cricrumble";
+
+          return (
+            <article
+              key={p.id}
+              className={`flex flex-col border bg-surface-card ${
+                isSelected ? "border-brand-500" : "border-line"
+              }`}
+            >
+              <div className="flex items-start gap-4 border-b border-line p-4">
+                {logo ? (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center bg-black p-1">
+                    <Image src={logo.src} alt={logo.alt} width={48} height={48} className="h-12 w-12 object-contain" />
+                  </div>
+                ) : (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center border border-line bg-surface-raised font-mono text-sm font-semibold uppercase text-ink-mute">
+                    {p.name.slice(0, 2)}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h2 className="text-[16px] font-semibold tracking-tight text-ink">{p.name}</h2>
+                    <span
+                      className={`badge ${
+                        p.status === "ACTIVE"
+                          ? "border-emerald-700/30 text-emerald-800"
+                          : "border-amber-700/30 text-amber-900"
+                      }`}
+                    >
+                      {p.status}
+                    </span>
+                    {isSelected ? (
+                      <span className="inline-flex items-center gap-1 font-mono text-[11px] text-brand-700">
+                        <Check className="h-3 w-3" />
+                        selected
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-0.5 font-mono text-[11px] text-ink-faint">
+                    /{p.slug} · {p.fcmProjectId}
+                  </p>
+                </div>
               </div>
-              <span
-                className={`badge ${p.status === "ACTIVE" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}
-              >
-                {p.status}
-              </span>
-            </div>
-            <dl className="mt-4 space-y-1.5 text-sm">
-              <div className="flex justify-between">
-                <dt className="text-slate-500">FCM project</dt>
-                <dd className="font-medium">{p.fcmProjectId}</dd>
+
+              <dl className="grid flex-1 grid-cols-2 gap-x-4 gap-y-2 p-4 text-[12px]">
+                <div>
+                  <dt className="text-ink-faint">Topic</dt>
+                  <dd className="mt-0.5 flex items-center gap-1 font-mono text-ink-soft">
+                    <Radio className="h-3 w-3" />
+                    {p.defaultBroadcastTopic}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-ink-faint">Devices</dt>
+                  <dd className="mt-0.5 tabular-nums text-ink-soft">{p.activeDeviceCount ?? "—"}</dd>
+                </div>
+                <div className="col-span-2">
+                  <dt className="text-ink-faint">Credential</dt>
+                  <dd className="mt-0.5 truncate font-mono text-[11px] text-ink-faint">{p.credentialFingerprint}</dd>
+                </div>
+                <div className="col-span-2">
+                  <dt className="text-ink-faint">Created</dt>
+                  <dd className="mt-0.5 text-ink-soft">{fmtDate(p.createdAt)}</dd>
+                </div>
+              </dl>
+
+              <div className="mt-auto flex flex-wrap gap-2 border-t border-line bg-surface-raised/50 p-3">
+                <button
+                  type="button"
+                  className="btn-secondary h-8 flex-1"
+                  onClick={() => selectProject(p.id)}
+                  disabled={isSelected}
+                >
+                  {isSelected ? "In use" : "Select"}
+                </button>
+                <Link
+                  href={`/projects/${p.id}`}
+                  className="btn-secondary h-8 flex-1"
+                  onClick={() => selectProject(p.id)}
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                  Manage
+                </Link>
+                <Link
+                  href="/campaigns/new"
+                  className={`btn-primary h-8 flex-1 ${cric ? "" : ""}`}
+                  onClick={() => selectProject(p.id)}
+                >
+                  Compose
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
               </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Service account</dt>
-                <dd className="font-mono text-xs text-slate-600">{p.credentialFingerprint}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Default topic</dt>
-                <dd className="font-medium">{p.defaultBroadcastTopic}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Created</dt>
-                <dd>{fmtDate(p.createdAt)}</dd>
-              </div>
-            </dl>
-            <div className="mt-4 flex gap-2">
-              <button
-                className="btn-secondary flex-1"
-                onClick={() => selectProject(p.id)}
-                disabled={selected?.id === p.id}
-              >
-                {selected?.id === p.id ? "Selected" : "Select"}
-              </button>
-              <Link href="/campaigns/new" className="btn-primary flex-1" onClick={() => selectProject(p.id)}>
-                New campaign
-              </Link>
-            </div>
-          </div>
-        ))}
+            </article>
+          );
+        })}
       </div>
     </div>
   );

@@ -52,6 +52,14 @@ const apiSchema = z.object({
   API_HOST: z.string().default("0.0.0.0"),
   API_PORT: z.coerce.number().int().positive().default(4000),
   FCM_DRIVER: z.enum(["mock", "firebase"]).default("mock"),
+  /**
+   * Shared fallback secret for POST /api/device-registrations when a project
+   * has no per-project registrationSecretHash. Prefer per-project secrets in
+   * production. Never expose this to the portal frontend.
+   */
+  DEVICE_REGISTRATION_SECRET: z.string().min(16).optional(),
+  /** Max device-registration requests per IP per minute. */
+  DEVICE_REGISTRATION_RATE_LIMIT: z.coerce.number().int().positive().default(60),
 });
 
 const webSchema = z.object({

@@ -9,11 +9,11 @@ JSON**, stored **encrypted at rest**. The portal loads the correct credential pe
 campaign and initializes a **named `firebase-admin` app per project**, so tokens
 and topics from one Firebase project are never mixed with another.
 
-> **Status:** Phase 1 complete — monorepo scaffold, Prisma schema, encrypted
-> `Project` CRUD + credential validation, named-app Firebase bootstrap,
-> topic broadcast, and send-now. The device-token registry, segments, BullMQ
-> scheduler, batched multicast, stale-token pruning, templates, and dashboard
-> pages for the later phases are also wired up and usable via the mock sender.
+> **Status:** Production migration path implemented — device registration API
+> (`POST /api/device-registrations`), CricRumble topic `cricrumble_all`,
+> inactive-token cleanup, template variable validation, expanded portal target
+> types, Flutter registration SDK, and migration docs. Firebase Console remains
+> the channel for legacy installs until they update.
 
 ## Architecture
 
@@ -102,16 +102,36 @@ Then open:
    - With `FCM_DRIVER=mock`, structural validation is performed by zod.
 3. Save. The JSON is encrypted with AES-256-GCM before it touches the database. The API only ever returns a **masked fingerprint** (e.g. `a1b2c3d4…f9e8`) — never the raw credential.
 
-## How to register a device token
+## How to register a device token (mobile apps)
 
-Client apps call the registration endpoint (also available on the **Device
-Tokens** dashboard page):
+CricRumble (and other apps) should use the Flutter helper in
+`packages/mobile-sdk/flutter` after `Firebase.initializeApp()`. That posts to:
+
+```bash
+curl -X POST http://localhost:4000/api/device-registrations \
+  -H 'Content-Type: application/json' \
+  -H 'X-App-Registration-Key: <registration-secret>' \
+  -d '{
+    "projectKey": "cricrumble",
+    "firebaseProjectId": "<firebase-project-id>",
+    "firebaseAppId": "<firebase-app-id>",
+    "token": "<fcm-token>",
+    "platform": "android",
+    "notificationPermission": "granted",
+    "appVersion": "2.0.0",
+    "appBuildNumber": "200"
+  }'
+```
+
+Legacy dashboard helper (same DB, project id path) still works:
 
 ```bash
 curl -X POST http://localhost:4000/projects/<PROJECT_ID>/tokens \
   -H 'Content-Type: application/json' \
-  -d '{ "token": "fcm-device-token", "platform": "ANDROID", "locale": "en-US", "topics": ["all-users"] }'
+  -d '{ "token": "fcm-device-token", "platform": "ANDROID", "locale": "en-US", "topics": ["cricrumble_all"] }'
 ```
+
+See [docs/MIGRATION.md](docs/MIGRATION.md) and [docs/TESTING.md](docs/TESTING.md).
 
 ## How to send a campaign
 
@@ -184,10 +204,15 @@ pnpm db:seed        # seed demo data
 pnpm db:studio      # open Prisma Studio
 ```
 
+## Migration notes (CricRumble)
+
+- Existing installs are **not** discoverable from Firebase; the portal only reaches devices that update and register.
+- “All CricRumble Users” in the portal = topic `cricrumble_all` (registered + subscribed devices).
+- Keep using Firebase Console for legacy versions during the transition.
+- SHA-1 / authorized domains are **not** portal notification targets.
+
 ## Roadmap
 
-- **Phase 1 (done):** scaffold, encrypted project CRUD + validation, named-app bootstrap, topic broadcast, send-now.
-- **Phase 2:** device-token registry, segments, BullMQ scheduler + scheduled sends, batched multicast + stale-token pruning. *(implemented; hardening ongoing)*
-- **Phase 3:** templates with variable substitution, test sends, richer analytics UI.
-- **Phase 4:** frequency capping, quiet hours, per-user timezone send, A/B split, roles/auth.
+- **Done:** multi-project portal, encrypted credentials, device registration migration, templates, invalid-token cleanup, Flutter SDK.
+- **Later:** portal SSO/roles, frequency capping, quiet hours, A/B split.
 ```

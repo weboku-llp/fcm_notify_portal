@@ -1,13 +1,13 @@
 import type { CampaignStatus } from "@notif/contracts";
 
 export const STATUS_STYLES: Record<CampaignStatus, string> = {
-  DRAFT: "bg-slate-100 text-slate-600",
-  SCHEDULED: "bg-amber-100 text-amber-700",
-  QUEUED: "bg-indigo-100 text-indigo-700",
-  SENDING: "bg-blue-100 text-blue-700",
-  COMPLETED: "bg-emerald-100 text-emerald-700",
-  FAILED: "bg-red-100 text-red-700",
-  CANCELLED: "bg-slate-200 text-slate-500",
+  DRAFT: "border-line text-ink-mute",
+  SCHEDULED: "border-amber-700/30 text-amber-900",
+  QUEUED: "border-ink/20 text-ink-soft",
+  SENDING: "border-sky-800/30 text-sky-900",
+  COMPLETED: "border-emerald-700/30 text-emerald-800",
+  FAILED: "border-red-700/30 text-red-800",
+  CANCELLED: "border-line text-ink-faint",
 };
 
 export function fmtDate(iso: string | null): string {

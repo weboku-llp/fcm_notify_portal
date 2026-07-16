@@ -3,14 +3,17 @@ import {
   type CreateCampaignInput,
   type TestCredentialsResult,
   type TestSendInput,
+  SegmentRules,
 } from "@notif/contracts";
 import { prisma, type Campaign, type CampaignStatus, type Prisma, type Project } from "@notif/db";
-import { getFcmSender, type PushMessage } from "./fcm/index.js";
-import { DomainError, getProjectOrThrow } from "./projects.js";
+import { writeAuditLog } from "./audit.js";
+import { getFcmSender, isCredentialMismatchError, isStaleTokenError, type PushMessage } from "./fcm/index.js";
+import { DomainError } from "./errors.js";
+import { getProjectOrThrow } from "./projects.js";
 import { projectContext } from "./secrets.js";
 import { tokenWhereFromRules } from "./segments.js";
-import { pruneStaleTokens } from "./tokens.js";
-import { SegmentRules } from "@notif/contracts";
+import { invalidateTokens } from "./tokens.js";
+import { renderTemplateStrict, TemplateVariableError } from "./templates.js";
 import { createLogger } from "@notif/logger";
 
 const log = createLogger("campaigns");
@@ -31,6 +34,8 @@ export function toPublicCampaign(c: Campaign): CampaignPublic {
     targetTopic: c.targetTopic,
     segmentId: c.segmentId,
     targetTokens: c.targetTokens,
+    targetUserIds: c.targetUserIds,
+    targetValue: c.targetValue,
     title: c.title,
     body: c.body,
     imageUrl: c.imageUrl,
@@ -39,10 +44,15 @@ export function toPublicCampaign(c: Campaign): CampaignPublic {
     status: c.status,
     scheduledAt: c.scheduledAt ? c.scheduledAt.toISOString() : null,
     timezone: c.timezone,
+    sentAt: c.sentAt ? c.sentAt.toISOString() : null,
+    estimatedRecipients: c.estimatedRecipients,
+    attemptedCount: c.attemptedCount,
     sentCount: c.sentCount,
     failedCount: c.failedCount,
     completedAt: c.completedAt ? c.completedAt.toISOString() : null,
     errorMessage: c.errorMessage,
+    firebaseMessageId: c.firebaseMessageId,
+    createdBy: c.createdBy,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };
@@ -59,22 +69,122 @@ function messageFromCampaign(c: Campaign, project: Project): PushMessage {
   };
 }
 
+function targetValueFor(mode: CreateCampaignInput["mode"], input: CreateCampaignInput, project: Project): string {
+  switch (mode) {
+    case "BROADCAST_TOPIC":
+      return `topic:${input.targetTopic ?? project.defaultBroadcastTopic}`;
+    case "ALL_REGISTERED":
+      return "all_registered_devices";
+    case "SELECTED_USERS":
+      return `users:${(input.targetUserIds ?? []).length}`;
+    case "SPECIFIC_TOKENS":
+      return `tokens:${(input.targetTokens ?? []).length}`;
+    case "SEGMENT":
+      return `segment:${input.segmentId ?? ""}`;
+    default:
+      return mode;
+  }
+}
+
 export interface CreateCampaignResult {
   campaign: CampaignPublic;
   /** True when the campaign should be enqueued immediately for sending. */
   enqueue: boolean;
 }
 
+async function resolveContent(
+  projectId: string,
+  input: CreateCampaignInput,
+): Promise<{
+  title: string;
+  body: string;
+  imageUrl: string | null;
+  deepLink: string | null;
+  dataJson: Record<string, string>;
+  templateId: string | null;
+}> {
+  if (input.templateId) {
+    const tpl = await prisma.template.findFirst({
+      where: { id: input.templateId, OR: [{ projectId }, { projectId: null }] },
+    });
+    if (!tpl) throw new DomainError(`Template ${input.templateId} not found`, "NOT_FOUND", 404);
+    try {
+      const rendered = renderTemplateStrict(
+        {
+          title: tpl.title,
+          body: tpl.body,
+          imageUrl: tpl.imageUrl,
+          deepLink: tpl.deepLink,
+          dataJson: asStringRecord(tpl.dataJson),
+        },
+        tpl.variables,
+        input.templateVariables ?? {},
+      );
+      return {
+        title: rendered.title,
+        body: rendered.body,
+        imageUrl: rendered.imageUrl ?? null,
+        deepLink: rendered.deepLink ?? null,
+        dataJson: rendered.dataJson ?? {},
+        templateId: tpl.id,
+      };
+    } catch (err) {
+      if (err instanceof TemplateVariableError) {
+        throw new DomainError(err.message, "MISSING_TEMPLATE_VARIABLES", 400);
+      }
+      throw err;
+    }
+  }
+
+  return {
+    title: input.title!,
+    body: input.body!,
+    imageUrl: input.imageUrl ?? null,
+    deepLink: input.deepLink ?? null,
+    dataJson: input.dataJson,
+    templateId: null,
+  };
+}
+
+async function estimateForCampaign(project: Project, input: CreateCampaignInput): Promise<number | null> {
+  if (input.mode === "BROADCAST_TOPIC") {
+    return prisma.deviceToken.count({ where: { projectId: project.id, isActive: true } });
+  }
+  if (input.mode === "ALL_REGISTERED") {
+    return prisma.deviceToken.count({ where: { projectId: project.id, isActive: true } });
+  }
+  if (input.mode === "SPECIFIC_TOKENS") return input.targetTokens?.length ?? 0;
+  if (input.mode === "SELECTED_USERS") {
+    const ids = input.targetUserIds ?? [];
+    if (ids.length === 0) return 0;
+    return prisma.deviceToken.count({
+      where: { projectId: project.id, isActive: true, userId: { in: ids } },
+    });
+  }
+  if (input.mode === "SEGMENT" && input.segmentId) {
+    const seg = await prisma.segment.findFirst({ where: { id: input.segmentId, projectId: project.id } });
+    if (!seg) return 0;
+    const rules = SegmentRules.parse(seg.rules);
+    return prisma.deviceToken.count({
+      where: { ...tokenWhereFromRules(project.id, rules), isActive: true },
+    });
+  }
+  return null;
+}
+
 export async function createCampaign(
   projectId: string,
   input: CreateCampaignInput,
 ): Promise<CreateCampaignResult> {
-  await getProjectOrThrow(projectId);
+  const project = await getProjectOrThrow(projectId);
 
   if (input.mode === "SEGMENT" && input.segmentId) {
     const seg = await prisma.segment.findFirst({ where: { id: input.segmentId, projectId } });
     if (!seg) throw new DomainError(`Segment ${input.segmentId} not found in project`, "NOT_FOUND", 404);
   }
+
+  const content = await resolveContent(projectId, input);
+  const estimatedRecipients = await estimateForCampaign(project, input);
 
   let status: CampaignStatus = "DRAFT";
   if (input.action === "schedule") status = "SCHEDULED";
@@ -83,19 +193,37 @@ export async function createCampaign(
   const campaign = await prisma.campaign.create({
     data: {
       projectId,
-      templateId: input.templateId ?? null,
+      templateId: content.templateId,
       mode: input.mode,
       targetTopic: input.targetTopic ?? null,
       segmentId: input.segmentId ?? null,
       targetTokens: input.targetTokens ?? [],
-      title: input.title,
-      body: input.body,
-      imageUrl: input.imageUrl ?? null,
-      deepLink: input.deepLink ?? null,
-      dataJson: input.dataJson as Prisma.InputJsonValue,
+      targetUserIds: input.targetUserIds ?? [],
+      targetValue: targetValueFor(input.mode, input, project),
+      title: content.title,
+      body: content.body,
+      imageUrl: content.imageUrl,
+      deepLink: content.deepLink,
+      dataJson: content.dataJson as Prisma.InputJsonValue,
       status,
       scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : null,
       timezone: input.timezone ?? null,
+      estimatedRecipients,
+      createdBy: input.createdBy ?? null,
+    },
+  });
+
+  await writeAuditLog({
+    projectId,
+    action: "CAMPAIGN_CREATED",
+    actor: input.createdBy ?? null,
+    summary: `Campaign created (${campaign.mode}) — ${campaign.title}`,
+    metadata: {
+      campaignId: campaign.id,
+      mode: campaign.mode,
+      action: input.action,
+      estimatedRecipients,
+      targetValue: campaign.targetValue,
     },
   });
 
@@ -129,13 +257,28 @@ export async function cancelCampaign(id: string): Promise<CampaignPublic> {
 
 async function resolveTokens(project: Project, campaign: Campaign): Promise<string[]> {
   if (campaign.mode === "SPECIFIC_TOKENS") return campaign.targetTokens;
+  if (campaign.mode === "ALL_REGISTERED") {
+    const tokens = await prisma.deviceToken.findMany({
+      where: { projectId: project.id, isActive: true },
+      select: { token: true },
+    });
+    return tokens.map((t) => t.token);
+  }
+  if (campaign.mode === "SELECTED_USERS") {
+    if (campaign.targetUserIds.length === 0) return [];
+    const tokens = await prisma.deviceToken.findMany({
+      where: { projectId: project.id, isActive: true, userId: { in: campaign.targetUserIds } },
+      select: { token: true },
+    });
+    return tokens.map((t) => t.token);
+  }
   if (campaign.mode === "SEGMENT") {
     if (!campaign.segmentId) return [];
     const seg = await prisma.segment.findFirst({ where: { id: campaign.segmentId, projectId: project.id } });
     if (!seg) return [];
     const rules = SegmentRules.parse(seg.rules);
     const tokens = await prisma.deviceToken.findMany({
-      where: tokenWhereFromRules(project.id, rules),
+      where: { ...tokenWhereFromRules(project.id, rules), isActive: true },
       select: { token: true },
     });
     return tokens.map((t) => t.token);
@@ -145,8 +288,8 @@ async function resolveTokens(project: Project, campaign: Campaign): Promise<stri
 
 /**
  * Core sender used by the worker. Loads the campaign + its project, sends via
- * the correct named Firebase app, updates counts, prunes stale tokens, and sets
- * a terminal status. Safe to call for BROADCAST_TOPIC / SEGMENT / SPECIFIC_TOKENS.
+ * the correct named Firebase app, updates counts, invalidates stale tokens, and
+ * sets a terminal status.
  */
 export async function runCampaign(campaignId: string): Promise<CampaignPublic> {
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
@@ -170,7 +313,8 @@ export async function runCampaign(campaignId: string): Promise<CampaignPublic> {
     return toPublicCampaign(updated);
   }
 
-  await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENDING" } });
+  const sentAt = new Date();
+  await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENDING", sentAt } });
 
   const sender = getFcmSender();
   const ctx = projectContext(project);
@@ -184,45 +328,89 @@ export async function runCampaign(campaignId: string): Promise<CampaignPublic> {
         where: { id: campaignId },
         data: {
           status: res.success ? "COMPLETED" : "FAILED",
+          attemptedCount: 1,
           sentCount: res.success ? 1 : 0,
           failedCount: res.success ? 0 : 1,
           errorMessage: res.error ?? null,
+          firebaseMessageId: res.messageId ?? null,
+          firebaseResponse: {
+            success: res.success,
+            messageId: res.messageId ?? null,
+            error: res.error ?? null,
+            topic,
+          } as Prisma.InputJsonValue,
           completedAt: new Date(),
         },
+      });
+      await writeAuditLog({
+        projectId: project.id,
+        action: res.success ? "CAMPAIGN_SENT" : "CAMPAIGN_FAILED",
+        summary: `Topic send ${res.success ? "ok" : "failed"} → ${topic}`,
+        metadata: { campaignId, topic, messageId: res.messageId, error: res.error },
       });
       return toPublicCampaign(updated);
     }
 
-    // Token-based sends (SEGMENT / SPECIFIC_TOKENS).
     const tokens = await resolveTokens(project, campaign);
     if (tokens.length === 0) {
       const updated = await prisma.campaign.update({
         where: { id: campaignId },
-        data: { status: "COMPLETED", sentCount: 0, failedCount: 0, completedAt: new Date() },
+        data: {
+          status: "COMPLETED",
+          attemptedCount: 0,
+          sentCount: 0,
+          failedCount: 0,
+          completedAt: new Date(),
+          firebaseResponse: { note: "No active registered devices matched the target" } as Prisma.InputJsonValue,
+        },
       });
       return toPublicCampaign(updated);
     }
 
     const result = await sender.sendToTokens(ctx, tokens, message);
 
-    const staleTokens = result.results.filter((r) => !r.success && isStale(r.errorCode)).map((r) => r.token);
+    const staleTokens = result.results
+      .filter((r) => !r.success && isStaleTokenError(r.errorCode))
+      .map((r) => r.token);
     if (staleTokens.length > 0) {
-      const pruned = await pruneStaleTokens(project.id, staleTokens);
-      log.info({ campaignId, pruned }, "pruned stale tokens");
+      const pruned = await invalidateTokens(project.id, staleTokens, "registration-token-not-registered");
+      log.info({ campaignId, pruned }, "invalidated stale tokens");
     }
 
-    // Best-effort delivery analytics.
+    const mismatchTokens = result.results
+      .filter((r) => !r.success && isCredentialMismatchError(r.errorCode))
+      .map((r) => r.token);
+    if (mismatchTokens.length > 0) {
+      await invalidateTokens(project.id, mismatchTokens, "mismatched-credential");
+      log.warn({ campaignId, count: mismatchTokens.length }, "mismatched-credential tokens invalidated");
+    }
+
     await recordDeliveries(campaignId, project.id, result.results);
 
     const updated = await prisma.campaign.update({
       where: { id: campaignId },
       data: {
         status: "COMPLETED",
+        attemptedCount: tokens.length,
         sentCount: result.successCount,
         failedCount: result.failureCount,
         completedAt: new Date(),
+        firebaseResponse: {
+          successCount: result.successCount,
+          failureCount: result.failureCount,
+          staleCount: staleTokens.length,
+          mismatchCount: mismatchTokens.length,
+        } as Prisma.InputJsonValue,
       },
     });
+
+    await writeAuditLog({
+      projectId: project.id,
+      action: "CAMPAIGN_SENT",
+      summary: `Token send completed — ${result.successCount} ok / ${result.failureCount} failed`,
+      metadata: { campaignId, attempted: tokens.length, stale: staleTokens.length },
+    });
+
     return toPublicCampaign(updated);
   } catch (err) {
     const message2 = err instanceof Error ? err.message : String(err);
@@ -231,21 +419,20 @@ export async function runCampaign(campaignId: string): Promise<CampaignPublic> {
       where: { id: campaignId },
       data: { status: "FAILED", errorMessage: message2, completedAt: new Date() },
     });
+    await writeAuditLog({
+      projectId: project.id,
+      action: "CAMPAIGN_FAILED",
+      summary: `Campaign failed: ${message2}`,
+      metadata: { campaignId },
+    });
     return toPublicCampaign(updated);
   }
-}
-
-function isStale(code?: string): boolean {
-  return (
-    code === "messaging/registration-token-not-registered" ||
-    code === "messaging/invalid-registration-token"
-  );
 }
 
 async function recordDeliveries(
   campaignId: string,
   projectId: string,
-  results: { token: string; success: boolean; error?: string; errorCode?: string }[],
+  results: { token: string; success: boolean; error?: string; errorCode?: string; messageId?: string }[],
 ): Promise<void> {
   const tokenRows = await prisma.deviceToken.findMany({
     where: { projectId, token: { in: results.map((r) => r.token) } },
@@ -255,8 +442,13 @@ async function recordDeliveries(
   const data = results.map((r) => ({
     campaignId,
     tokenId: idByToken.get(r.token) ?? null,
-    status: (r.success ? "SENT" : isStale(r.errorCode) ? "STALE" : "FAILED") as "SENT" | "FAILED" | "STALE",
+    status: (r.success ? "SENT" : isStaleTokenError(r.errorCode) ? "STALE" : "FAILED") as
+      | "SENT"
+      | "FAILED"
+      | "STALE",
     error: r.error ?? null,
+    errorCode: r.errorCode ?? null,
+    messageId: r.messageId ?? null,
   }));
   if (data.length > 0) await prisma.campaignDelivery.createMany({ data });
 }
@@ -274,5 +466,13 @@ export async function testSend(projectId: string, input: TestSendInput): Promise
     data: input.dataJson,
     androidChannelId: project.androidChannelId,
   });
+
+  if (!res.success && isStaleTokenError(res.errorCode)) {
+    await invalidateTokens(project.id, [input.token], res.errorCode ?? "invalid-registration-token");
+  }
+  if (!res.success && isCredentialMismatchError(res.errorCode)) {
+    await invalidateTokens(project.id, [input.token], "mismatched-credential");
+  }
+
   return { ok: res.success, error: res.error };
 }

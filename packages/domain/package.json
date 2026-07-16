@@ -11,9 +11,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/__tests__/templates.test.ts src/__tests__/fcm-errors.test.ts src/__tests__/device-registration.smoke.test.ts",
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
+    "@notif/config": "workspace:*",
     "@notif/contracts": "workspace:*",
     "@notif/crypto": "workspace:*",
     "@notif/db": "workspace:*",

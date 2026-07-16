@@ -7,8 +7,18 @@ const idParams = z.object({ id: z.string().min(1) });
 
 export async function templateRoutes(app: FastifyInstance): Promise<void> {
   app.get("/templates", async (req) => {
-    const query = z.object({ projectId: z.string().optional() }).parse(req.query);
-    return { templates: await listTemplates(query.projectId) };
+    const query = z
+      .object({
+        projectId: z.string().optional(),
+        includeGlobal: z
+          .union([z.boolean(), z.string()])
+          .optional()
+          .transform((v) => v !== false && v !== "false" && v !== "0"),
+      })
+      .parse(req.query);
+    return {
+      templates: await listTemplates(query.projectId, { includeGlobal: query.includeGlobal ?? true }),
+    };
   });
 
   app.post("/templates", async (req, reply) => {

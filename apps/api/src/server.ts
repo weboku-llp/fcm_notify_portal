@@ -1,4 +1,5 @@
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import { createLogger } from "@notif/logger";
 import { prisma } from "@notif/db";
@@ -7,6 +8,7 @@ import { env } from "./env.js";
 import { registerErrorHandler } from "./lib/errors.js";
 import { closeQueue } from "./queue.js";
 import { campaignRoutes } from "./routes/campaigns.js";
+import { deviceRegistrationRoutes } from "./routes/device-registrations.js";
 import { projectRoutes } from "./routes/projects.js";
 import { segmentRoutes } from "./routes/segments.js";
 import { templateRoutes } from "./routes/templates.js";
@@ -22,16 +24,28 @@ async function buildServer() {
 
   await app.register(cors, { origin: true });
   await app.register(sensible);
+  await app.register(rateLimit, {
+    global: false,
+    max: 1000,
+    timeWindow: "1 minute",
+  });
 
   registerErrorHandler(app);
 
   app.get("/health", async () => {
     await prisma.$queryRaw`SELECT 1`;
-    return { status: "ok", driver: env.FCM_DRIVER, time: new Date().toISOString() };
+    return {
+      status: "ok",
+      driver: env.FCM_DRIVER,
+      time: new Date().toISOString(),
+      // Never expose DEVICE_REGISTRATION_SECRET or encryption keys here.
+      registrationAuthConfigured: Boolean(env.DEVICE_REGISTRATION_SECRET),
+    };
   });
 
   await app.register(projectRoutes);
   await app.register(tokenRoutes);
+  await app.register(deviceRegistrationRoutes);
   await app.register(segmentRoutes);
   await app.register(templateRoutes);
   await app.register(campaignRoutes);
@@ -62,3 +76,5 @@ async function main(): Promise<void> {
 }
 
 void main();
+
+export { buildServer };

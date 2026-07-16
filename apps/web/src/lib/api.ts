@@ -52,15 +52,35 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ fcmServiceAccountJson }),
     }),
+  testProjectCredentials: (projectId: string, fcmServiceAccountJson: string) =>
+    request<TestCredentialsResult>(`/projects/${projectId}/test-credentials`, {
+      method: "POST",
+      body: JSON.stringify({ fcmServiceAccountJson }),
+    }),
 
   // Tokens
-  listTokens: (projectId: string) =>
-    request<{ tokens: DeviceTokenPublic[] }>(`/projects/${projectId}/tokens`).then((r) => r.tokens),
+  listTokens: (projectId: string, activeOnly = false) =>
+    request<{ tokens: DeviceTokenPublic[]; activeCount: number; coverageNote: string }>(
+      `/projects/${projectId}/tokens?activeOnly=${activeOnly ? "true" : "false"}`,
+    ),
   registerToken: (projectId: string, body: unknown) =>
     request<{ token: DeviceTokenPublic }>(`/projects/${projectId}/tokens`, {
       method: "POST",
       body: JSON.stringify(body),
     }).then((r) => r.token),
+  estimateAudience: (
+    projectId: string,
+    body: {
+      mode: string;
+      segmentId?: string;
+      targetUserIds?: string[];
+      targetTokens?: string[];
+    },
+  ) =>
+    request<{ estimatedRecipients: number; coverageNote: string }>(
+      `/projects/${projectId}/audience-estimate`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 
   // Segments
   listSegments: (projectId: string) =>
@@ -77,14 +97,22 @@ export const api = {
     }).then((r) => r.count),
 
   // Templates
-  listTemplates: (projectId?: string) =>
-    request<{ templates: TemplatePublic[] }>(
-      `/templates${projectId ? `?projectId=${projectId}` : ""}`,
-    ).then((r) => r.templates),
+  listTemplates: (projectId?: string, includeGlobal = true) => {
+    const params = new URLSearchParams();
+    if (projectId) params.set("projectId", projectId);
+    params.set("includeGlobal", includeGlobal ? "true" : "false");
+    const q = params.toString();
+    return request<{ templates: TemplatePublic[] }>(`/templates${q ? `?${q}` : ""}`).then((r) => r.templates);
+  },
   createTemplate: (body: unknown) =>
     request<{ template: TemplatePublic }>("/templates", { method: "POST", body: JSON.stringify(body) }).then(
       (r) => r.template,
     ),
+  updateTemplate: (id: string, body: unknown) =>
+    request<{ template: TemplatePublic }>(`/templates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }).then((r) => r.template),
   deleteTemplate: (id: string) => request<void>(`/templates/${id}`, { method: "DELETE" }),
 
   // Campaigns

@@ -1,6 +1,6 @@
 import { SegmentRules, type CreateSegmentInput, type SegmentPublic, type UpdateSegmentInput } from "@notif/contracts";
 import { prisma, type Prisma, type Segment } from "@notif/db";
-import { DomainError } from "./projects.js";
+import { DomainError } from "./errors.js";
 
 export function toPublicSegment(s: Segment): SegmentPublic {
   return {
@@ -18,7 +18,7 @@ export function tokenWhereFromRules(
   projectId: string,
   rules: SegmentRules,
 ): Prisma.DeviceTokenWhereInput {
-  const where: Prisma.DeviceTokenWhereInput = { projectId };
+  const where: Prisma.DeviceTokenWhereInput = { projectId, isActive: true };
   if (rules.platform) where.platform = rules.platform;
   if (rules.locale) where.locale = rules.locale;
   if (rules.topic) where.topics = { has: rules.topic };

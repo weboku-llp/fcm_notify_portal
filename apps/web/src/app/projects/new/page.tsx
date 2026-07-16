@@ -22,6 +22,8 @@ export default function NewProjectPage() {
   const [slugTouched, setSlugTouched] = useState(false);
   const [defaultBroadcastTopic, setTopic] = useState("broadcast");
   const [androidChannelId, setChannel] = useState("");
+  const [fcmAppId, setFcmAppId] = useState("");
+  const [registrationSecret, setRegistrationSecret] = useState("");
   const [json, setJson] = useState("");
 
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -60,6 +62,8 @@ export default function NewProjectPage() {
         fcmServiceAccountJson: json,
         defaultBroadcastTopic,
         androidChannelId: androidChannelId || undefined,
+        fcmAppId: fcmAppId || undefined,
+        registrationSecret: registrationSecret || undefined,
       });
       await refresh();
       selectProject(project.id);
@@ -105,11 +109,42 @@ export default function NewProjectPage() {
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="label">Default broadcast topic</label>
-            <input className="input" value={defaultBroadcastTopic} onChange={(e) => setTopic(e.target.value)} />
+            <input
+              className="input"
+              value={defaultBroadcastTopic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="cricrumble_all"
+            />
           </div>
           <div>
             <label className="label">Android channel ID (optional)</label>
             <input className="input" value={androidChannelId} onChange={(e) => setChannel(e.target.value)} placeholder="default_channel" />
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="label">Firebase App ID (optional)</label>
+            <input
+              className="input font-mono text-xs"
+              value={fcmAppId}
+              onChange={(e) => setFcmAppId(e.target.value)}
+              placeholder="1:123:android:abc"
+            />
+          </div>
+          <div>
+            <label className="label">Mobile registration secret</label>
+            <input
+              className="input font-mono text-xs"
+              type="password"
+              value={registrationSecret}
+              onChange={(e) => setRegistrationSecret(e.target.value)}
+              placeholder="min 16 chars — hashed at rest, never returned"
+              minLength={16}
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Used by the app as X-App-Registration-Key. Not a Firebase credential.
+            </p>
           </div>
         </div>
 

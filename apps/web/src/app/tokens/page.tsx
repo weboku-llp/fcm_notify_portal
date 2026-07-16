@@ -6,9 +6,13 @@ import { useProjects } from "@/components/ProjectContext";
 import { api } from "@/lib/api";
 import { fmtDate } from "@/lib/ui";
 
+const MIGRATION_NOTE =
+  "Portal notifications reach devices that have updated and registered with the new notification system. Use Firebase Console during the migration period to reach older app versions.";
+
 export default function TokensPage() {
   const { selected } = useProjects();
   const [tokens, setTokens] = useState<DeviceTokenPublic[]>([]);
+  const [activeCount, setActiveCount] = useState(0);
   const [token, setToken] = useState("");
   const [platform, setPlatform] = useState<Platform>("ANDROID");
   const [locale, setLocale] = useState("");
@@ -17,7 +21,13 @@ export default function TokensPage() {
 
   const load = useCallback(async () => {
     if (!selected) return;
-    setTokens(await api.listTokens(selected.id).catch(() => []));
+    const res = await api.listTokens(selected.id).catch(() => ({
+      tokens: [] as DeviceTokenPublic[],
+      activeCount: 0,
+      coverageNote: MIGRATION_NOTE,
+    }));
+    setTokens(res.tokens);
+    setActiveCount(res.activeCount);
   }, [selected]);
 
   useEffect(() => {
@@ -46,11 +56,19 @@ export default function TokensPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <h1 className="text-2xl font-semibold">Device tokens — {selected.name}</h1>
+      <div>
+        <h1 className="text-2xl font-semibold">Device registrations — {selected.name}</h1>
+        <p className="text-sm text-slate-500">
+          Active registered devices: <span className="font-medium text-slate-800">{activeCount}</span>
+          {" · "}topic <code className="rounded bg-slate-100 px-1">{selected.defaultBroadcastTopic}</code>
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{MIGRATION_NOTE}</div>
 
       <form onSubmit={register} className="card grid gap-4 p-6 sm:grid-cols-2">
         <div className="sm:col-span-2">
-          <label className="label">Token</label>
+          <label className="label">Token (manual / test)</label>
           <input className="input font-mono text-xs" value={token} onChange={(e) => setToken(e.target.value)} required />
         </div>
         <div>
@@ -67,7 +85,12 @@ export default function TokensPage() {
         </div>
         <div className="sm:col-span-2">
           <label className="label">Topics (comma separated)</label>
-          <input className="input" value={topics} onChange={(e) => setTopics(e.target.value)} placeholder="all-users, promos" />
+          <input
+            className="input"
+            value={topics}
+            onChange={(e) => setTopics(e.target.value)}
+            placeholder={selected.defaultBroadcastTopic}
+          />
         </div>
         <div>
           <button className="btn-primary" disabled={busy}>
@@ -82,6 +105,7 @@ export default function TokensPage() {
             <tr>
               <th className="px-4 py-3">Token</th>
               <th className="px-4 py-3">Platform</th>
+              <th className="px-4 py-3">Active</th>
               <th className="px-4 py-3">Locale</th>
               <th className="px-4 py-3">Topics</th>
               <th className="px-4 py-3">Last seen</th>
@@ -90,8 +114,14 @@ export default function TokensPage() {
           <tbody className="divide-y divide-slate-100">
             {tokens.map((t) => (
               <tr key={t.id} className="hover:bg-slate-50">
-                <td className="px-4 py-3 font-mono text-xs">{t.token}</td>
+                <td className="px-4 py-3 font-mono text-xs">
+                  <div className="max-w-[220px] truncate">{t.token}</div>
+                  {!t.isActive && t.invalidationReason ? (
+                    <div className="text-[10px] text-red-600">{t.invalidationReason}</div>
+                  ) : null}
+                </td>
                 <td className="px-4 py-3">{t.platform}</td>
+                <td className="px-4 py-3">{t.isActive ? "yes" : "no"}</td>
                 <td className="px-4 py-3">{t.locale ?? "—"}</td>
                 <td className="px-4 py-3">{t.topics.join(", ") || "—"}</td>
                 <td className="px-4 py-3 text-slate-500">{fmtDate(t.lastSeenAt)}</td>
@@ -99,8 +129,8 @@ export default function TokensPage() {
             ))}
             {tokens.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
-                  No tokens registered.
+                <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
+                  No tokens registered yet. They appear after the app update registers devices.
                 </td>
               </tr>
             ) : null}

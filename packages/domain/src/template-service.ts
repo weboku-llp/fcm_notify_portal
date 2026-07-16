@@ -1,6 +1,6 @@
 import type { CreateTemplateInput, TemplatePublic, UpdateTemplateInput } from "@notif/contracts";
 import { prisma, type Prisma, type Template } from "@notif/db";
-import { DomainError } from "./projects.js";
+import { DomainError } from "./errors.js";
 
 function asStringRecord(json: Prisma.JsonValue | null | undefined): Record<string, string> {
   if (!json || typeof json !== "object" || Array.isArray(json)) return {};
@@ -45,10 +45,23 @@ export async function createTemplate(input: CreateTemplateInput): Promise<Templa
   return toPublicTemplate(tpl);
 }
 
-/** List templates visible to a project: its own + global (projectId = null). */
-export async function listTemplates(projectId?: string): Promise<TemplatePublic[]> {
+/**
+ * List templates.
+ * - no projectId: all templates
+ * - projectId + includeGlobal: project's own + global (default for compose)
+ * - projectId + includeGlobal=false: only templates owned by that project
+ */
+export async function listTemplates(
+  projectId?: string,
+  opts?: { includeGlobal?: boolean },
+): Promise<TemplatePublic[]> {
+  const includeGlobal = opts?.includeGlobal !== false;
   const rows = await prisma.template.findMany({
-    where: projectId ? { OR: [{ projectId }, { projectId: null }] } : undefined,
+    where: projectId
+      ? includeGlobal
+        ? { OR: [{ projectId }, { projectId: null }] }
+        : { projectId }
+      : undefined,
     orderBy: { createdAt: "desc" },
   });
   return rows.map(toPublicTemplate);

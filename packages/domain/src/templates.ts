@@ -1,6 +1,7 @@
 /**
  * Very small, safe {{variable}} substitution. Unknown variables are replaced
- * with an empty string. Whitespace inside the braces is tolerated: {{ name }}.
+ * with an empty string when `strict` is false. Whitespace inside the braces is
+ * tolerated: {{ name }}.
  */
 const VAR_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
 
@@ -39,4 +40,30 @@ export function extractVariables(...strings: (string | null | undefined)[]): str
     for (const m of s.matchAll(VAR_RE)) found.add(m[1]!);
   }
   return [...found];
+}
+
+export class TemplateVariableError extends Error {
+  constructor(
+    message: string,
+    readonly missing: string[],
+  ) {
+    super(message);
+    this.name = "TemplateVariableError";
+  }
+}
+
+/** Validate that every required variable has a non-empty value, then render. */
+export function renderTemplateStrict<T extends RenderableContent>(
+  content: T,
+  requiredVariables: string[],
+  vars: Record<string, string>,
+): T {
+  const missing = requiredVariables.filter((v) => {
+    const val = vars[v];
+    return val === undefined || val === null || String(val).trim() === "";
+  });
+  if (missing.length > 0) {
+    throw new TemplateVariableError(`Missing required template variables: ${missing.join(", ")}`, missing);
+  }
+  return renderContent(content, vars);
 }

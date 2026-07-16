@@ -8,6 +8,9 @@
   },
   "scripts": {
     "dev": "turbo run dev",
+    "dev:web": "pnpm --filter @notif/web dev",
+    "dev:api": "pnpm --filter @notif/api dev",
+    "dev:worker": "pnpm --filter @notif/worker dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
@@ -16,7 +19,8 @@
     "db:migrate": "pnpm --filter @notif/db migrate",
     "db:push": "pnpm --filter @notif/db push",
     "db:seed": "pnpm --filter @notif/db seed",
-    "db:studio": "pnpm --filter @notif/db studio"
+    "db:studio": "pnpm --filter @notif/db studio",
+    "test": "pnpm --filter @notif/domain test"
   },
   "devDependencies": {
     "turbo": "^2.3.3",

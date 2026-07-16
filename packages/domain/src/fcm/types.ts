@@ -46,14 +46,23 @@ export interface CredentialCheckResult {
   error?: string;
 }
 
-/** Error codes that mean a token should be pruned from the registry. */
+/** Error codes that mean a token should be marked inactive (never permanently retry). */
 export const STALE_TOKEN_ERROR_CODES = new Set<string>([
   "messaging/registration-token-not-registered",
   "messaging/invalid-registration-token",
 ]);
 
+export const CREDENTIAL_MISMATCH_ERROR_CODES = new Set<string>([
+  "messaging/mismatched-credential",
+  "messaging/third-party-auth-error",
+]);
+
 export function isStaleTokenError(code?: string): boolean {
   return code !== undefined && STALE_TOKEN_ERROR_CODES.has(code);
+}
+
+export function isCredentialMismatchError(code?: string): boolean {
+  return code !== undefined && CREDENTIAL_MISMATCH_ERROR_CODES.has(code);
 }
 
 /**

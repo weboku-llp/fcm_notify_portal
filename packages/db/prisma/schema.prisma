@@ -22,6 +22,8 @@ enum CampaignMode {
   BROADCAST_TOPIC
   SEGMENT
   SPECIFIC_TOKENS
+  ALL_REGISTERED
+  SELECTED_USERS
 }
 
 enum CampaignStatus {
@@ -40,9 +42,36 @@ enum DeliveryStatus {
   STALE
 }
 
+enum TopicSubscriptionStatus {
+  PENDING
+  SUBSCRIBED
+  FAILED
+  UNKNOWN
+}
+
+enum NotificationPermission {
+  GRANTED
+  DENIED
+  PROVISIONAL
+  UNKNOWN
+}
+
+enum AuditAction {
+  DEVICE_REGISTERED
+  DEVICE_INVALIDATED
+  CAMPAIGN_CREATED
+  CAMPAIGN_SENT
+  CAMPAIGN_FAILED
+  CREDENTIALS_TESTED
+  PROJECT_CREATED
+  PROJECT_UPDATED
+}
+
 model Project {
   id   String @id @default(cuid())
+  /// Human-readable display name.
   name String
+  /// Stable project key used by mobile apps (e.g. "cricrumble").
   slug String @unique
 
   /// Encrypted at rest (AES-256-GCM). Never logged or returned in API responses.
@@ -51,8 +80,13 @@ model Project {
   credentialFingerprint String
   /// Firebase project_id parsed from the service account (safe to display).
   fcmProjectId   String
+  /// Optional Firebase app id (android/ios) for client registration correlation.
+  fcmAppId       String?
   /// Service-account client_email (safe to display).
   fcmClientEmail String
+
+  /// SHA-256 hex of the app registration secret. Never returned in API responses.
+  registrationSecretHash String?
 
   defaultBroadcastTopic String        @default("broadcast")
   androidChannelId      String?
@@ -65,30 +99,50 @@ model Project {
   segments     Segment[]
   templates    Template[]
   campaigns    Campaign[]
+  auditLogs    AuditLog[]
 
   @@index([status])
+  @@index([fcmProjectId])
 }
 
 model DeviceToken {
-  id        String   @id @default(cuid())
-  projectId String
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  token     String
-  platform  Platform
+  id         String  @id @default(cuid())
+  projectId  String
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Denormalized project slug / projectKey for unique constraint & lookups.
+  projectKey String
 
-  userId     String?
-  locale     String?
-  appVersion String?
-  topics     String[] @default([])
+  firebaseProjectId String
+  firebaseAppId     String?
 
-  lastSeenAt DateTime @default(now())
-  createdAt  DateTime @default(now())
+  token    String
+  platform Platform
+
+  userId                 String?
+  appVersion             String?
+  appBuildNumber         String?
+  notificationPermission NotificationPermission @default(UNKNOWN)
+  /// Device locale (BCP-47), e.g. en-US.
+  locale                 String?
+  timezone               String?
+  topics                 String[]                @default([])
+  topicSubscriptionStatus TopicSubscriptionStatus @default(UNKNOWN)
+
+  isActive           Boolean   @default(true)
+  lastSeenAt         DateTime  @default(now())
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  invalidatedAt      DateTime?
+  invalidationReason String?
 
   deliveries CampaignDelivery[]
 
-  @@unique([projectId, token])
+  @@unique([projectKey, token])
+  @@index([projectId, isActive])
   @@index([projectId, platform])
   @@index([projectId, userId])
+  @@index([firebaseProjectId])
+  @@index([lastSeenAt])
 }
 
 model Segment {
@@ -139,10 +193,13 @@ model Campaign {
   template   Template?    @relation(fields: [templateId], references: [id], onDelete: SetNull)
   mode       CampaignMode
 
-  targetTopic  String?
-  segmentId    String?
-  segment      Segment?  @relation(fields: [segmentId], references: [id], onDelete: SetNull)
-  targetTokens String[]  @default([])
+  targetTopic   String?
+  segmentId     String?
+  segment       Segment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  targetTokens  String[] @default([])
+  targetUserIds String[] @default([])
+  /// Human-readable target summary for history UI.
+  targetValue   String?
 
   // Rendered snapshot of the content that will be sent.
   title    String
@@ -154,11 +211,17 @@ model Campaign {
   status      CampaignStatus @default(DRAFT)
   scheduledAt DateTime?
   timezone    String?
+  sentAt      DateTime?
 
-  sentCount    Int       @default(0)
-  failedCount  Int       @default(0)
-  completedAt  DateTime?
-  errorMessage String?
+  estimatedRecipients Int?
+  attemptedCount      Int       @default(0)
+  sentCount           Int       @default(0)
+  failedCount         Int       @default(0)
+  completedAt         DateTime?
+  errorMessage        String?
+  firebaseMessageId   String?
+  firebaseResponse    Json?
+  createdBy           String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -177,7 +240,23 @@ model CampaignDelivery {
   token      DeviceToken?   @relation(fields: [tokenId], references: [id], onDelete: SetNull)
   status     DeliveryStatus
   error      String?
+  errorCode  String?
+  messageId  String?
   createdAt  DateTime       @default(now())
 
   @@index([campaignId, status])
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  projectId String?
+  project   Project?    @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  action    AuditAction
+  actor     String?
+  summary   String
+  metadata  Json        @default("{}")
+  createdAt DateTime    @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([action, createdAt])
 }
