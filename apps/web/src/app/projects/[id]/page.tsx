@@ -47,6 +47,10 @@ export default function ProjectDetailPage() {
   const [fcmAppId, setFcmAppId] = useState("");
   const [status, setStatus] = useState<"ACTIVE" | "PAUSED">("ACTIVE");
   const [registrationSecret, setRegistrationSecret] = useState("");
+  const [tokenSourceApiBaseUrl, setTokenSourceApiBaseUrl] = useState("");
+  const [tokenSourceApiKey, setTokenSourceApiKey] = useState("");
+  const [tokenSourceEnabled, setTokenSourceEnabled] = useState(false);
+  const [tokenSourceBusy, setTokenSourceBusy] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -67,6 +71,8 @@ export default function ProjectDetailPage() {
       setChannel(p.androidChannelId ?? "");
       setFcmAppId(p.fcmAppId ?? "");
       setStatus(p.status);
+      setTokenSourceApiBaseUrl(p.tokenSourceApiBaseUrl ?? "");
+      setTokenSourceEnabled(p.tokenSourceEnabled);
       selectProject(p.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load project");
@@ -296,6 +302,163 @@ export default function ProjectDetailPage() {
                 placeholder="min 16 chars — hashed at rest"
                 minLength={registrationSecret ? 16 : undefined}
               />
+            </div>
+          </div>
+
+          <div className="space-y-3 border border-line bg-surface-raised p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 className="text-[14px] font-semibold text-ink">Main project API</h3>
+                <p className="mt-0.5 text-[12px] text-ink-mute">
+                  Enter this project&apos;s backend URL, then <span className="font-medium">Test &amp; turn on</span>.
+                  Sync turns <span className="font-medium">ON</span> only when the tokens endpoint returns{" "}
+                  <span className="font-mono">HTTP 200</span>.
+                </p>
+              </div>
+              <span
+                className={`rounded px-2 py-0.5 text-[11px] font-medium ${
+                  project.tokenSourceEnabled
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-slate-200 text-slate-700"
+                }`}
+              >
+                {project.tokenSourceEnabled ? "ON" : "OFF"}
+              </span>
+            </div>
+            <div>
+              <label className="label">Main API base URL</label>
+              <input
+                className="input font-mono text-[12px]"
+                value={tokenSourceApiBaseUrl}
+                onChange={(e) => {
+                  setTokenSourceApiBaseUrl(e.target.value);
+                  setTokenSourceEnabled(false);
+                }}
+                placeholder="http://localhost:4000 or https://api.cricrumble.com"
+              />
+              <p className="mt-1 text-[11px] text-ink-faint">
+                Probes <span className="font-mono">GET {"{url}"}/api/internal/notif-portal/tokens</span>
+              </p>
+            </div>
+            <div>
+              <label className="label">
+                API key {project.hasTokenSourceApiKey ? "(set — leave blank to keep)" : "(required first time)"}
+              </label>
+              <input
+                className="input font-mono text-[12px]"
+                type="password"
+                value={tokenSourceApiKey}
+                onChange={(e) => setTokenSourceApiKey(e.target.value)}
+                placeholder="same as NOTIF_PORTAL_TOKEN_EXPORT_KEY on project API"
+                minLength={tokenSourceApiKey ? 16 : undefined}
+              />
+            </div>
+            {project.tokenSourceLastSyncAt ? (
+              <p className="text-[12px] text-ink-soft">
+                Last sync: {new Date(project.tokenSourceLastSyncAt).toLocaleString()} ·{" "}
+                {project.tokenSourceLastSyncOk ? (
+                  <span className="text-emerald-700">{project.tokenSourceLastSyncCount ?? 0} tokens</span>
+                ) : (
+                  <span className="text-red-700">{project.tokenSourceLastSyncError ?? "failed"}</span>
+                )}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={
+                  tokenSourceBusy ||
+                  !tokenSourceApiBaseUrl.trim() ||
+                  (!project.hasTokenSourceApiKey && tokenSourceApiKey.trim().length < 16)
+                }
+                onClick={async () => {
+                  setTokenSourceBusy(true);
+                  setSettingsMsg(null);
+                  try {
+                    const res = await api.testAndEnableTokenSource(id, {
+                      tokenSourceApiBaseUrl: tokenSourceApiBaseUrl.trim(),
+                      ...(tokenSourceApiKey.trim().length >= 16
+                        ? { tokenSourceApiKey: tokenSourceApiKey.trim() }
+                        : {}),
+                    });
+                    setProject(res.project);
+                    setTokenSourceEnabled(res.project.tokenSourceEnabled);
+                    setTokenSourceApiBaseUrl(res.project.tokenSourceApiBaseUrl ?? "");
+                    setTokenSourceApiKey("");
+                    await refresh();
+                    setSettingsMsg({
+                      ok: res.ok,
+                      text: res.ok
+                        ? `HTTP ${res.httpStatus ?? 200} — token sync ON. Sample: ${res.tokenCountSample ?? 0} token(s).`
+                        : `HTTP ${res.httpStatus ?? "—"} — sync left OFF. ${res.error ?? "Test failed"}`,
+                    });
+                  } catch (err) {
+                    setTokenSourceEnabled(false);
+                    setSettingsMsg({
+                      ok: false,
+                      text: err instanceof ApiError ? err.message : String(err),
+                    });
+                  } finally {
+                    setTokenSourceBusy(false);
+                  }
+                }}
+              >
+                {tokenSourceBusy ? "Testing…" : "Test & turn on"}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={tokenSourceBusy || !project.tokenSourceEnabled}
+                onClick={async () => {
+                  setTokenSourceBusy(true);
+                  setSettingsMsg(null);
+                  try {
+                    const res = await api.syncTokenSource(id);
+                    await load();
+                    await refresh();
+                    setSettingsMsg({
+                      ok: res.ok,
+                      text: `Synced ${res.upserted} token(s), deactivated ${res.deactivated}.`,
+                    });
+                  } catch (err) {
+                    setSettingsMsg({
+                      ok: false,
+                      text: err instanceof ApiError ? err.message : String(err),
+                    });
+                  } finally {
+                    setTokenSourceBusy(false);
+                  }
+                }}
+              >
+                Sync now
+              </button>
+              {project.tokenSourceEnabled ? (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled={tokenSourceBusy}
+                  onClick={async () => {
+                    setTokenSourceBusy(true);
+                    try {
+                      const updated = await api.updateProject(id, { tokenSourceEnabled: false });
+                      setProject(updated);
+                      setTokenSourceEnabled(false);
+                      await refresh();
+                      setSettingsMsg({ ok: true, text: "Token sync turned OFF." });
+                    } catch (err) {
+                      setSettingsMsg({
+                        ok: false,
+                        text: err instanceof ApiError ? err.message : String(err),
+                      });
+                    } finally {
+                      setTokenSourceBusy(false);
+                    }
+                  }}
+                >
+                  Turn off
+                </button>
+              ) : null}
             </div>
           </div>
 

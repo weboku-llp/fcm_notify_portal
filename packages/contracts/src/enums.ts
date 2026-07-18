@@ -51,5 +51,9 @@ export const AuditAction = z.enum([
   "CREDENTIALS_TESTED",
   "PROJECT_CREATED",
   "PROJECT_UPDATED",
+  "TOKEN_SYNCED",
 ]);
 export type AuditAction = z.infer<typeof AuditAction>;
+
+export const DeviceTokenSource = z.enum(["DIRECT_REGISTER", "PROJECT_API"]);
+export type DeviceTokenSource = z.infer<typeof DeviceTokenSource>;

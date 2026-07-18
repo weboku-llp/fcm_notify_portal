@@ -4,7 +4,14 @@ import { z } from "zod";
 export const QUEUE_NAMES = {
   send: "campaign-send",
   scheduler: "campaign-scheduler",
+  tokenSync: "project-token-sync",
 } as const;
+
+/** Periodic / manual sync of FCM tokens from a project API into the portal DB. */
+export const TokenSyncJob = z.object({
+  projectId: z.string().optional(),
+});
+export type TokenSyncJob = z.infer<typeof TokenSyncJob>;
 
 /** Job that sends a single campaign. jobId convention: `campaign-<id>`. */
 export const SendCampaignJob = z.object({

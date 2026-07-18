@@ -6,6 +6,7 @@ export * from "./segment.js";
 export * from "./template.js";
 export * from "./campaign.js";
 export * from "./queue.js";
+export * from "./token-source.js";
 
 /** Standard API error envelope. */
 export interface ApiError {

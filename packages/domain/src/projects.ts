@@ -11,6 +11,7 @@ import { writeAuditLog } from "./audit.js";
 import { DomainError } from "./errors.js";
 import { getFcmSender } from "./fcm/index.js";
 import { countActiveDevices, hashRegistrationSecret } from "./tokens.js";
+import { encryptTokenSourceApiKey } from "./token-source.js";
 
 export { DomainError };
 
@@ -29,6 +30,13 @@ export function toPublicProject(p: Project, activeDeviceCount?: number): Project
     androidChannelId: p.androidChannelId,
     status: p.status,
     hasRegistrationSecret: Boolean(p.registrationSecretHash),
+    tokenSourceApiBaseUrl: p.tokenSourceApiBaseUrl,
+    tokenSourceEnabled: p.tokenSourceEnabled,
+    hasTokenSourceApiKey: Boolean(p.tokenSourceApiKeyEncrypted),
+    tokenSourceLastSyncAt: p.tokenSourceLastSyncAt ? p.tokenSourceLastSyncAt.toISOString() : null,
+    tokenSourceLastSyncOk: p.tokenSourceLastSyncOk,
+    tokenSourceLastSyncError: p.tokenSourceLastSyncError,
+    tokenSourceLastSyncCount: p.tokenSourceLastSyncCount,
     activeDeviceCount,
     createdAt: p.createdAt.toISOString(),
     updatedAt: p.updatedAt.toISOString(),
@@ -74,6 +82,11 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectP
       registrationSecretHash: input.registrationSecret
         ? hashRegistrationSecret(input.registrationSecret)
         : null,
+      tokenSourceApiBaseUrl: input.tokenSourceApiBaseUrl ?? null,
+      tokenSourceApiKeyEncrypted: input.tokenSourceApiKey
+        ? encryptTokenSourceApiKey(input.tokenSourceApiKey)
+        : null,
+      tokenSourceEnabled: input.tokenSourceEnabled ?? false,
     },
   });
 
@@ -123,6 +136,17 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
     data.registrationSecretHash = input.registrationSecret
       ? hashRegistrationSecret(input.registrationSecret)
       : null;
+  }
+  if (input.tokenSourceApiBaseUrl !== undefined) {
+    data.tokenSourceApiBaseUrl = input.tokenSourceApiBaseUrl;
+  }
+  if (input.tokenSourceApiKey !== undefined) {
+    data.tokenSourceApiKeyEncrypted = input.tokenSourceApiKey
+      ? encryptTokenSourceApiKey(input.tokenSourceApiKey)
+      : null;
+  }
+  if (input.tokenSourceEnabled !== undefined) {
+    data.tokenSourceEnabled = input.tokenSourceEnabled;
   }
 
   if (input.fcmServiceAccountJson !== undefined) {

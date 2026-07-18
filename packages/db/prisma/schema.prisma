@@ -65,6 +65,15 @@ enum AuditAction {
   CREDENTIALS_TESTED
   PROJECT_CREATED
   PROJECT_UPDATED
+  TOKEN_SYNCED
+}
+
+/// Where a DeviceToken row originated.
+enum DeviceTokenSource {
+  /// Posted directly to this portal (legacy / SDK register).
+  DIRECT_REGISTER
+  /// Pulled from the project's own API (e.g. CricRumble /api/internal/notif-portal/tokens).
+  PROJECT_API
 }
 
 model Project {
@@ -87,6 +96,16 @@ model Project {
 
   /// SHA-256 hex of the app registration secret. Never returned in API responses.
   registrationSecretHash String?
+
+  /// Project's own backend that holds FCM tokens (e.g. https://api.cricrumble.com). No trailing slash.
+  tokenSourceApiBaseUrl       String?
+  /// Encrypted portal→project API key (X-Notif-Portal-Key). Never returned in API responses.
+  tokenSourceApiKeyEncrypted  String?
+  tokenSourceEnabled          Boolean   @default(false)
+  tokenSourceLastSyncAt       DateTime?
+  tokenSourceLastSyncOk       Boolean?
+  tokenSourceLastSyncError    String?
+  tokenSourceLastSyncCount    Int?
 
   defaultBroadcastTopic String        @default("broadcast")
   androidChannelId      String?
@@ -117,6 +136,7 @@ model DeviceToken {
 
   token    String
   platform Platform
+  source   DeviceTokenSource @default(DIRECT_REGISTER)
 
   userId                 String?
   appVersion             String?
@@ -198,6 +218,8 @@ model Campaign {
   segment       Segment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
   targetTokens  String[] @default([])
   targetUserIds String[] @default([])
+  /// When true, worker refreshes tokens from the project API immediately before send.
+  refreshFromApiBeforeSend Boolean @default(false)
   /// Human-readable target summary for history UI.
   targetValue   String?
 

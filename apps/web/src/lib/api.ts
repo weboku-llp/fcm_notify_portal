@@ -5,6 +5,8 @@ import type {
   SegmentPublic,
   TemplatePublic,
   TestCredentialsResult,
+  TokenSourceTestResult,
+  TokenSyncResult,
 } from "@notif/contracts";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -57,6 +59,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ fcmServiceAccountJson }),
     }),
+  testTokenSource: (projectId: string) =>
+    request<TokenSourceTestResult>(`/projects/${projectId}/token-source/test`, { method: "POST" }),
+  testAndEnableTokenSource: (
+    projectId: string,
+    body: { tokenSourceApiBaseUrl: string; tokenSourceApiKey?: string },
+  ) =>
+    request<TokenSourceTestResult & { project: ProjectPublic }>(
+      `/projects/${projectId}/token-source/test-and-enable`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  syncTokenSource: (projectId: string) =>
+    request<TokenSyncResult>(`/projects/${projectId}/token-source/sync`, { method: "POST" }),
 
   // Tokens
   listTokens: (projectId: string, activeOnly = false) =>

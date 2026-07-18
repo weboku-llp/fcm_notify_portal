@@ -33,6 +33,8 @@ export const CreateCampaignInput = z
     segmentId: z.string().nullable().optional(),
     targetTokens: z.array(z.string().min(1)).max(100_000).optional(),
     targetUserIds: z.array(z.string().min(1)).max(100_000).optional(),
+    /** Pull latest tokens from the project API into portal cache immediately before send. */
+    refreshFromApiBeforeSend: z.boolean().optional().default(false),
     // Scheduling
     scheduledAt: z.string().datetime().nullable().optional(),
     timezone: z.string().max(64).nullable().optional(),
@@ -105,6 +107,7 @@ export const CampaignPublic = z.object({
   segmentId: z.string().nullable(),
   targetTokens: z.array(z.string()),
   targetUserIds: z.array(z.string()),
+  refreshFromApiBeforeSend: z.boolean(),
   targetValue: z.string().nullable(),
   title: z.string(),
   body: z.string(),

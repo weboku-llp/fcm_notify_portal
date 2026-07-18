@@ -1,9 +1,17 @@
-import { CreateProjectInput, ServiceAccountInput, UpdateProjectInput } from "@notif/contracts";
+import {
+  CreateProjectInput,
+  ServiceAccountInput,
+  TestAndEnableTokenSourceInput,
+  UpdateProjectInput,
+} from "@notif/contracts";
 import {
   createProject,
   getProjectPublic,
   listProjects,
+  syncProjectTokens,
+  testAndEnableTokenSource,
   testServiceAccount,
+  testTokenSource,
   updateProject,
 } from "@notif/domain";
 import type { FastifyInstance } from "fastify";
@@ -43,5 +51,28 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   app.post("/projects/test-credentials", async (req) => {
     const body = z.object({ fcmServiceAccountJson: ServiceAccountInput }).parse(req.body);
     return await testServiceAccount(body.fcmServiceAccountJson);
+  });
+
+  /** Probe stored project API (does not flip enabled). */
+  app.post("/projects/:id/token-source/test", async (req) => {
+    const { id } = idParams.parse(req.params);
+    return await testTokenSource(id);
+  });
+
+  /**
+   * Save main API URL (+ key), require HTTP 200 from project tokens endpoint,
+   * then turn token sync ON. On non-200, sync stays OFF.
+   */
+  app.post("/projects/:id/token-source/test-and-enable", async (req) => {
+    const { id } = idParams.parse(req.params);
+    const input = TestAndEnableTokenSourceInput.parse(req.body);
+    const result = await testAndEnableTokenSource(id, input);
+    return { ...result, project: await getProjectPublic(id) };
+  });
+
+  /** Pull tokens from project API into portal cache now. */
+  app.post("/projects/:id/token-source/sync", async (req) => {
+    const { id } = idParams.parse(req.params);
+    return await syncProjectTokens(id);
   });
 }

@@ -13,6 +13,7 @@ import { getProjectOrThrow } from "./projects.js";
 import { projectContext } from "./secrets.js";
 import { tokenWhereFromRules } from "./segments.js";
 import { invalidateTokens } from "./tokens.js";
+import { projectHasTokenSource, syncProjectTokens } from "./token-source.js";
 import { renderTemplateStrict, TemplateVariableError } from "./templates.js";
 import { createLogger } from "@notif/logger";
 
@@ -35,6 +36,7 @@ export function toPublicCampaign(c: Campaign): CampaignPublic {
     segmentId: c.segmentId,
     targetTokens: c.targetTokens,
     targetUserIds: c.targetUserIds,
+    refreshFromApiBeforeSend: c.refreshFromApiBeforeSend,
     targetValue: c.targetValue,
     title: c.title,
     body: c.body,
@@ -199,6 +201,7 @@ export async function createCampaign(
       segmentId: input.segmentId ?? null,
       targetTokens: input.targetTokens ?? [],
       targetUserIds: input.targetUserIds ?? [],
+      refreshFromApiBeforeSend: input.refreshFromApiBeforeSend ?? false,
       targetValue: targetValueFor(input.mode, input, project),
       title: content.title,
       body: content.body,
@@ -349,6 +352,18 @@ export async function runCampaign(campaignId: string): Promise<CampaignPublic> {
         metadata: { campaignId, topic, messageId: res.messageId, error: res.error },
       });
       return toPublicCampaign(updated);
+    }
+
+    // Optional live refresh from project API into portal cache before token multicast.
+    if (
+      campaign.refreshFromApiBeforeSend &&
+      (campaign.mode === "ALL_REGISTERED" || campaign.mode === "SELECTED_USERS") &&
+      projectHasTokenSource(project)
+    ) {
+      await syncProjectTokens(project.id, {
+        userIds: campaign.mode === "SELECTED_USERS" ? campaign.targetUserIds : undefined,
+        deactivateMissing: campaign.mode === "ALL_REGISTERED",
+      });
     }
 
     const tokens = await resolveTokens(project, campaign);

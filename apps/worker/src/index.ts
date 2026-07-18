@@ -3,9 +3,10 @@ import {
   sendJobId,
   type SchedulerTickJob,
   type SendCampaignJob,
+  type TokenSyncJob,
 } from "@notif/contracts";
 import { prisma } from "@notif/db";
-import { runCampaign } from "@notif/domain";
+import { runCampaign, syncAllEnabledProjectTokens, syncProjectTokens } from "@notif/domain";
 import { createLogger } from "@notif/logger";
 import { Queue, Worker, type Job } from "bullmq";
 import { Redis } from "ioredis";
@@ -17,8 +18,10 @@ const connection = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
 
 const sendQueue = new Queue<SendCampaignJob>(QUEUE_NAMES.send, { connection });
 const schedulerQueue = new Queue<SchedulerTickJob>(QUEUE_NAMES.scheduler, { connection });
+const tokenSyncQueue = new Queue<TokenSyncJob>(QUEUE_NAMES.tokenSync, { connection });
 
 const SCHEDULER_INTERVAL_MS = 30_000;
+const TOKEN_SYNC_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Promote due SCHEDULED campaigns to QUEUED and enqueue a send job for each,
@@ -51,7 +54,7 @@ async function promoteDueCampaigns(): Promise<number> {
   return due.length;
 }
 
-async function registerRepeatableScheduler(): Promise<void> {
+async function registerRepeatableJobs(): Promise<void> {
   await schedulerQueue.add(
     "tick",
     {},
@@ -63,6 +66,18 @@ async function registerRepeatableScheduler(): Promise<void> {
     },
   );
   log.info({ everyMs: SCHEDULER_INTERVAL_MS }, "registered repeatable scheduler");
+
+  await tokenSyncQueue.add(
+    "tick",
+    {},
+    {
+      repeat: { every: TOKEN_SYNC_INTERVAL_MS },
+      jobId: "token-sync-tick",
+      removeOnComplete: 10,
+      removeOnFail: 10,
+    },
+  );
+  log.info({ everyMs: TOKEN_SYNC_INTERVAL_MS }, "registered repeatable token sync");
 }
 
 function startWorkers(): Worker[] {
@@ -89,17 +104,32 @@ function startWorkers(): Worker[] {
     { connection, concurrency: 1 },
   );
 
-  for (const w of [sendWorker, schedulerWorker]) {
+  const tokenSyncWorker = new Worker<TokenSyncJob>(
+    QUEUE_NAMES.tokenSync,
+    async (job: Job<TokenSyncJob>) => {
+      if (job.data.projectId) {
+        const result = await syncProjectTokens(job.data.projectId);
+        log.info({ projectId: job.data.projectId, ...result }, "manual token sync finished");
+        return result;
+      }
+      const result = await syncAllEnabledProjectTokens();
+      log.info(result, "periodic token sync finished");
+      return result;
+    },
+    { connection, concurrency: 1 },
+  );
+
+  for (const w of [sendWorker, schedulerWorker, tokenSyncWorker]) {
     w.on("failed", (job, err) => log.error({ jobId: job?.id, err: err.message }, "job failed"));
     w.on("error", (err) => log.error({ err: err.message }, "worker error"));
   }
 
-  return [sendWorker, schedulerWorker];
+  return [sendWorker, schedulerWorker, tokenSyncWorker];
 }
 
 async function main(): Promise<void> {
   log.info({ driver: env.FCM_DRIVER }, "worker starting");
-  await registerRepeatableScheduler();
+  await registerRepeatableJobs();
   const workers = startWorkers();
 
   const shutdown = async (signal: string) => {
@@ -107,6 +137,7 @@ async function main(): Promise<void> {
     await Promise.all(workers.map((w) => w.close()));
     await sendQueue.close();
     await schedulerQueue.close();
+    await tokenSyncQueue.close();
     await connection.quit();
     await prisma.$disconnect().catch(() => undefined);
     process.exit(0);

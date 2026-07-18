@@ -17,6 +17,11 @@ export const CreateProjectInput = z.object({
   androidChannelId: z.string().max(200).optional(),
   /** Plaintext registration secret for mobile apps. Stored as a SHA-256 hash only. */
   registrationSecret: z.string().min(16).max(256).optional(),
+  /** Project backend base URL that exposes /api/internal/notif-portal/tokens */
+  tokenSourceApiBaseUrl: z.string().url().max(500).nullable().optional(),
+  /** Shared secret sent as X-Notif-Portal-Key. Encrypted at rest. */
+  tokenSourceApiKey: z.string().min(16).max(256).nullable().optional(),
+  tokenSourceEnabled: z.boolean().optional(),
 });
 export type CreateProjectInput = z.infer<typeof CreateProjectInput>;
 
@@ -28,6 +33,9 @@ export const UpdateProjectInput = z.object({
   androidChannelId: z.string().max(200).nullable().optional(),
   status: ProjectStatus.optional(),
   registrationSecret: z.string().min(16).max(256).nullable().optional(),
+  tokenSourceApiBaseUrl: z.string().url().max(500).nullable().optional(),
+  tokenSourceApiKey: z.string().min(16).max(256).nullable().optional(),
+  tokenSourceEnabled: z.boolean().optional(),
 });
 export type UpdateProjectInput = z.infer<typeof UpdateProjectInput>;
 
@@ -48,6 +56,13 @@ export const ProjectPublic = z.object({
   androidChannelId: z.string().nullable(),
   status: ProjectStatus,
   hasRegistrationSecret: z.boolean(),
+  tokenSourceApiBaseUrl: z.string().nullable(),
+  tokenSourceEnabled: z.boolean(),
+  hasTokenSourceApiKey: z.boolean(),
+  tokenSourceLastSyncAt: z.string().nullable(),
+  tokenSourceLastSyncOk: z.boolean().nullable(),
+  tokenSourceLastSyncError: z.string().nullable(),
+  tokenSourceLastSyncCount: z.number().nullable(),
   activeDeviceCount: z.number().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),

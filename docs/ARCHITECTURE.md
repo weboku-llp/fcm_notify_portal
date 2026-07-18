@@ -1,20 +1,17 @@
 # Architecture — multi-project FCM portal + CricRumble migration
 
 ```
-CricRumble RN app
-  getToken + subscribeToTopic(cricrumble_all)
-        |
-        |  POST /api/device/fcm/token  (+ /api/user/fcm/token after login)
-        v
-  CricRumble API (A:\weboku\cricrumble-main\apps\api)  — token store only
-
-Ops / send path (this repo):
-   apps/web (portal) → apps/api → BullMQ → apps/worker
-        → firebase-admin send({ topic: cricrumble_all })
-   Portal does not need CricRumble token DB for topic broadcasts.
+RN app → Project API (register tokens + subscribeToTopic)
+              ↑
+              │ GET /api/internal/notif-portal/tokens
+              │ (sync every 5m + optional live refresh before send)
+Notification portal (this repo)
+   apps/web → apps/api → BullMQ worker
+        → Firebase Admin: topic OR multicast cached tokens
 ```
 
-See root `notification_readme_app.md` for RN integration (split: tokens on CricRumble API, send from this portal).
+Multi-project: each portal `Project` has its own Firebase SA + optional token-source API URL/key.  
+Contract: `docs/PROJECT_TOKEN_API.md`. RN notes: `notification_readme_app.md`.
 
 ## Isolation rules
 

@@ -18,9 +18,21 @@ type UiTarget =
 const TARGETS: { value: UiTarget; label: string; hint: string }[] = [
   { value: "TEST_DEVICE", label: "Test device token", hint: "Send a one-off test (not a campaign)" },
   { value: "INDIVIDUAL_TOKEN", label: "Individual device token", hint: "One or more exact FCM tokens" },
-  { value: "SELECTED_USERS", label: "Selected users", hint: "Active tokens for user IDs in our DB" },
-  { value: "ALL_REGISTERED", label: "All registered devices", hint: "Every active portal-registered device" },
-  { value: "PROJECT_TOPIC", label: "Project-wide topic", hint: "Default broadcast topic for this project" },
+  {
+    value: "SELECTED_USERS",
+    label: "Selected users",
+    hint: "By userId — tokens synced from the project API (or local register)",
+  },
+  {
+    value: "ALL_REGISTERED",
+    label: "All devices (token cache)",
+    hint: "Every active token in portal cache (synced from project API)",
+  },
+  {
+    value: "PROJECT_TOPIC",
+    label: "Project-wide topic",
+    hint: "Firebase topic broadcast (devices must subscribeToTopic)",
+  },
   { value: "CUSTOM_TOPIC", label: "Custom topic", hint: "Any FCM topic name" },
   { value: "SEGMENT", label: "Filtered segment", hint: "Devices matching a saved segment" },
 ];
@@ -68,6 +80,7 @@ export default function NewCampaignPage() {
   const [activeCount, setActiveCount] = useState<number | null>(null);
   const [estimate, setEstimate] = useState<number | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [refreshFromApiBeforeSend, setRefreshFromApiBeforeSend] = useState(true);
 
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -177,6 +190,8 @@ export default function NewCampaignPage() {
       segmentId: mode === "SEGMENT" ? segmentId || undefined : undefined,
       targetTokens: mode === "SPECIFIC_TOKENS" ? tokens : undefined,
       targetUserIds: mode === "SELECTED_USERS" ? userIds : undefined,
+      refreshFromApiBeforeSend:
+        mode === "ALL_REGISTERED" || mode === "SELECTED_USERS" ? refreshFromApiBeforeSend : false,
       scheduledAt: action === "schedule" && scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
@@ -317,8 +332,32 @@ export default function NewCampaignPage() {
             ) : null}
             {target === "ALL_REGISTERED" ? (
               <p className="text-sm text-slate-600">
-                Multicast to every <strong>active</strong> device registration for this project in our database.
+                Multicast to every <strong>active</strong> token in the portal cache for this project
+                (usually synced from the project API).
               </p>
+            ) : null}
+            {target === "ALL_REGISTERED" || target === "SELECTED_USERS" ? (
+              <label className="flex items-start gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={refreshFromApiBeforeSend}
+                  onChange={(e) => setRefreshFromApiBeforeSend(e.target.checked)}
+                  disabled={!selected.tokenSourceEnabled}
+                />
+                <span>
+                  Live refresh from project API before send
+                  {!selected.tokenSourceEnabled ? (
+                    <span className="block text-xs text-amber-700">
+                      Enable Project token API in project settings first.
+                    </span>
+                  ) : (
+                    <span className="block text-xs text-slate-500">
+                      Pulls latest tokens into cache, then sends via Firebase.
+                    </span>
+                  )}
+                </span>
+              </label>
             ) : null}
           </div>
         </section>
