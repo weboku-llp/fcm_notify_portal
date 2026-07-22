@@ -1,6 +1,7 @@
 "use client";
 
 import type { CampaignMode, TemplatePublic } from "@notif/contracts";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useProjects } from "@/components/ProjectContext";
@@ -60,7 +61,7 @@ const MIGRATION_NOTE =
 
 export default function NewCampaignPage() {
   const router = useRouter();
-  const { selected } = useProjects();
+  const { selected, refresh } = useProjects();
 
   const [target, setTarget] = useState<UiTarget>("PROJECT_TOPIC");
   const [title, setTitle] = useState("");
@@ -81,6 +82,7 @@ export default function NewCampaignPage() {
   const [estimate, setEstimate] = useState<number | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [refreshFromApiBeforeSend, setRefreshFromApiBeforeSend] = useState(true);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -248,6 +250,32 @@ export default function NewCampaignPage() {
   const canSubmit = Boolean(templateId) || (title.trim() && body.trim());
   const topicLabel =
     target === "PROJECT_TOPIC" ? selected.defaultBroadcastTopic : targetTopic || selected.defaultBroadcastTopic;
+  const apiSyncOn = Boolean(
+    selected.tokenSourceEnabled && selected.tokenSourceApiBaseUrl && selected.hasTokenSourceApiKey,
+  );
+  const usesTokenCache = target === "ALL_REGISTERED" || target === "SELECTED_USERS";
+
+  async function syncTokensFromProjectApi() {
+    if (!selected) return;
+    setSyncBusy(true);
+    setMsg(null);
+    try {
+      const res = await api.syncTokenSource(selected.id);
+      await refresh();
+      await loadMeta();
+      setMsg({
+        ok: res.ok,
+        text: `API sync: ${res.upserted} token(s) fetched, ${res.deactivated} deactivated. Active cache: check summary.`,
+      });
+    } catch (err) {
+      setMsg({
+        ok: false,
+        text: err instanceof ApiError ? err.message : String(err),
+      });
+    } finally {
+      setSyncBusy(false);
+    }
+  }
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -260,11 +288,75 @@ export default function NewCampaignPage() {
           </p>
         </div>
 
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        <section
+          className={`rounded-lg border p-4 text-sm ${
+            apiSyncOn ? "border-emerald-200 bg-emerald-50 text-emerald-950" : "border-amber-200 bg-amber-50 text-amber-950"
+          }`}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold">Project API token sync</h2>
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                    apiSyncOn ? "bg-emerald-200/80 text-emerald-900" : "bg-amber-200/80 text-amber-900"
+                  }`}
+                >
+                  {apiSyncOn ? "ON" : "OFF"}
+                </span>
+              </div>
+              {apiSyncOn ? (
+                <>
+                  <p className="mt-1 break-all font-mono text-[11px] opacity-80">{selected.tokenSourceApiBaseUrl}</p>
+                  <p className="mt-1 text-[12px]">
+                    Fetches all device tokens from the project API into the portal cache
+                    {usesTokenCache ? " (required for All devices / Selected users)." : "."}
+                  </p>
+                  {selected.tokenSourceLastSyncAt ? (
+                    <p className="mt-1 text-[12px]">
+                      Last sync: {new Date(selected.tokenSourceLastSyncAt).toLocaleString()}
+                      {selected.tokenSourceLastSyncOk ? (
+                        <> · {selected.tokenSourceLastSyncCount ?? 0} token(s)</>
+                      ) : (
+                        <> · failed: {selected.tokenSourceLastSyncError ?? "unknown"}</>
+                      )}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[12px]">No sync yet — run Sync now to pull all user device tokens.</p>
+                  )}
+                  <p className="mt-1 font-medium">Active in portal cache: {activeCount ?? "—"}</p>
+                </>
+              ) : (
+                <p className="mt-1 text-[12px]">
+                  Main project API is not linked. Add URL + key and Test &amp; turn on in project settings before
+                  fetching all users&apos; device tokens.
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+              {apiSyncOn ? (
+                <button
+                  type="button"
+                  className="btn-secondary h-9"
+                  disabled={syncBusy || busy}
+                  onClick={() => void syncTokensFromProjectApi()}
+                >
+                  {syncBusy ? "Syncing…" : "Sync now"}
+                </button>
+              ) : (
+                <Link
+                  href={`/projects/${selected.id}?tab=settings`}
+                  className="btn-primary h-9 inline-flex items-center justify-center px-3"
+                >
+                  Configure API
+                </Link>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
           {MIGRATION_NOTE}
-          {activeCount !== null ? (
-            <p className="mt-2 font-medium">Registered portal devices (active): {activeCount}</p>
-          ) : null}
         </div>
 
         <section className="card p-6">
@@ -332,28 +424,29 @@ export default function NewCampaignPage() {
             ) : null}
             {target === "ALL_REGISTERED" ? (
               <p className="text-sm text-slate-600">
-                Multicast to every <strong>active</strong> token in the portal cache for this project
-                (usually synced from the project API).
+                Multicast to every <strong>active</strong> token in the portal cache
+                ({activeCount ?? 0} now). Use <strong>Sync now</strong> above to fetch all users&apos; device tokens
+                from the project API first.
               </p>
             ) : null}
-            {target === "ALL_REGISTERED" || target === "SELECTED_USERS" ? (
+            {usesTokenCache ? (
               <label className="flex items-start gap-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
                   className="mt-0.5"
                   checked={refreshFromApiBeforeSend}
                   onChange={(e) => setRefreshFromApiBeforeSend(e.target.checked)}
-                  disabled={!selected.tokenSourceEnabled}
+                  disabled={!apiSyncOn}
                 />
                 <span>
                   Live refresh from project API before send
-                  {!selected.tokenSourceEnabled ? (
+                  {!apiSyncOn ? (
                     <span className="block text-xs text-amber-700">
-                      Enable Project token API in project settings first.
+                      Configure project API sync first (panel above).
                     </span>
                   ) : (
                     <span className="block text-xs text-slate-500">
-                      Pulls latest tokens into cache, then sends via Firebase.
+                      Re-fetches all device tokens from the project API, then sends via Firebase.
                     </span>
                   )}
                 </span>
@@ -476,7 +569,13 @@ export default function NewCampaignPage() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Summary</h2>
           <dl className="space-y-2 text-sm">
             <div className="flex justify-between gap-2">
-              <dt className="text-slate-500">Registered devices</dt>
+              <dt className="text-slate-500">API sync</dt>
+              <dd className={`font-medium ${apiSyncOn ? "text-emerald-700" : "text-amber-700"}`}>
+                {apiSyncOn ? "ON" : "OFF"}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt className="text-slate-500">Cached tokens</dt>
               <dd className="font-medium">{activeCount ?? "—"}</dd>
             </div>
             <div className="flex justify-between gap-2">
@@ -485,9 +584,34 @@ export default function NewCampaignPage() {
             </div>
             <div className="flex justify-between gap-2">
               <dt className="text-slate-500">Target type</dt>
-              <dd className="font-medium">{TARGETS.find((t) => t.value === target)?.label}</dd>
+              <dd className="font-medium text-right">{TARGETS.find((t) => t.value === target)?.label}</dd>
             </div>
+            {apiSyncOn && selected.tokenSourceLastSyncAt ? (
+              <div className="border-t border-slate-100 pt-2 text-[11px] text-slate-500">
+                Last API sync {new Date(selected.tokenSourceLastSyncAt).toLocaleString()}
+                {selected.tokenSourceLastSyncOk
+                  ? ` · ${selected.tokenSourceLastSyncCount ?? 0} pulled`
+                  : " · failed"}
+              </div>
+            ) : null}
           </dl>
+          {apiSyncOn ? (
+            <button
+              type="button"
+              className="btn-secondary mt-3 w-full"
+              disabled={syncBusy || busy}
+              onClick={() => void syncTokensFromProjectApi()}
+            >
+              {syncBusy ? "Syncing…" : "Sync tokens from API"}
+            </button>
+          ) : (
+            <Link
+              href={`/projects/${selected.id}?tab=settings`}
+              className="btn-secondary mt-3 flex h-9 w-full items-center justify-center"
+            >
+              Configure API sync
+            </Link>
+          )}
         </div>
 
         <div className="card p-5">

@@ -1,11 +1,24 @@
 "use client";
 
-import { ArrowRight, Check, Loader2, Plus, Radio, Settings2 } from "lucide-react";
+import type { ProjectPublic } from "@notif/contracts";
+import { ArrowRight, Check, Link2, Loader2, Plus, Radio, Settings2 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useProjects } from "@/components/ProjectContext";
 import { projectLogo } from "@/lib/brand";
 import { fmtDate } from "@/lib/ui";
+
+/** Firebase SA + topic + main project API tested & turned on. */
+function isProjectFullyConfigured(p: ProjectPublic): boolean {
+  return Boolean(
+    p.fcmProjectId &&
+      p.credentialFingerprint &&
+      p.defaultBroadcastTopic &&
+      p.tokenSourceEnabled &&
+      p.tokenSourceApiBaseUrl &&
+      p.hasTokenSourceApiKey,
+  );
+}
 
 export default function ProjectsPage() {
   const { projects, loading, error, selected, selectProject } = useProjects();
@@ -50,7 +63,8 @@ export default function ProjectsPage() {
         {projects.map((p) => {
           const isSelected = selected?.id === p.id;
           const logo = projectLogo(p.slug);
-          const cric = p.slug === "cricrumble";
+          const configured = isProjectFullyConfigured(p);
+          const settingsHref = `/projects/${p.id}?tab=settings`;
 
           return (
             <article
@@ -81,6 +95,15 @@ export default function ProjectsPage() {
                     >
                       {p.status}
                     </span>
+                    <span
+                      className={`badge ${
+                        configured
+                          ? "border-emerald-700/30 text-emerald-800"
+                          : "border-amber-700/30 text-amber-900"
+                      }`}
+                    >
+                      {configured ? "Configured" : "Not configured"}
+                    </span>
                     {isSelected ? (
                       <span className="inline-flex items-center gap-1 font-mono text-[11px] text-brand-700">
                         <Check className="h-3 w-3" />
@@ -107,6 +130,23 @@ export default function ProjectsPage() {
                   <dd className="mt-0.5 tabular-nums text-ink-soft">{p.activeDeviceCount ?? "—"}</dd>
                 </div>
                 <div className="col-span-2">
+                  <dt className="text-ink-faint">Main project API</dt>
+                  <dd className="mt-0.5 text-ink-soft">
+                    {configured ? (
+                      <span className="break-all font-mono text-[11px]">{p.tokenSourceApiBaseUrl}</span>
+                    ) : (
+                      <Link
+                        href={settingsHref}
+                        onClick={() => selectProject(p.id)}
+                        className="inline-flex items-center gap-1 font-medium text-brand-700 underline underline-offset-2"
+                      >
+                        <Link2 className="h-3.5 w-3.5" />
+                        Not configured — add API link
+                      </Link>
+                    )}
+                  </dd>
+                </div>
+                <div className="col-span-2">
                   <dt className="text-ink-faint">Credential</dt>
                   <dd className="mt-0.5 truncate font-mono text-[11px] text-ink-faint">{p.credentialFingerprint}</dd>
                 </div>
@@ -126,16 +166,16 @@ export default function ProjectsPage() {
                   {isSelected ? "In use" : "Select"}
                 </button>
                 <Link
-                  href={`/projects/${p.id}`}
+                  href={configured ? `/projects/${p.id}` : settingsHref}
                   className="btn-secondary h-8 flex-1"
                   onClick={() => selectProject(p.id)}
                 >
                   <Settings2 className="h-3.5 w-3.5" />
-                  Manage
+                  {configured ? "Manage" : "Configure"}
                 </Link>
                 <Link
                   href="/campaigns/new"
-                  className={`btn-primary h-8 flex-1 ${cric ? "" : ""}`}
+                  className="btn-primary h-8 flex-1"
                   onClick={() => selectProject(p.id)}
                 >
                   Compose

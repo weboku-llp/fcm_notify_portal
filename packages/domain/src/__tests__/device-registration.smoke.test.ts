@@ -22,10 +22,16 @@ describe("device registration smoke", () => {
       process.env.DEVICE_REGISTRATION_SECRET,
     );
 
+    // Read the project's *current* Firebase ids rather than hardcoding the
+    // seed placeholder — the cricrumble project gets migrated to its real
+    // Firebase credentials (fcmProjectId/fcmAppId) outside of this test, and
+    // registerDevice() rejects any mismatch (FIREBASE_PROJECT_MISMATCH).
+    const cricrumble = await prisma.project.findUniqueOrThrow({ where: { slug: "cricrumble" } });
+
     const input = DeviceRegistrationInput.parse({
       projectKey: "cricrumble",
-      firebaseProjectId: "cricrumble-fcm",
-      firebaseAppId: "1:000000000000:android:cricrumbledemo",
+      firebaseProjectId: cricrumble.fcmProjectId,
+      firebaseAppId: cricrumble.fcmAppId ?? "1:000000000000:android:cricrumbledemo",
       token: "tok-smoke-android-1",
       platform: "android",
       notificationPermission: "granted",
