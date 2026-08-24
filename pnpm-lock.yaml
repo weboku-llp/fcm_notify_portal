@@ -50,6 +50,9 @@ importers:
       '@notif/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@prisma/client':
+        specifier: 6.19.3
+        version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       bullmq:
         specifier: ^5.34.5
         version: 5.80.1
@@ -142,6 +145,9 @@ importers:
       '@notif/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@prisma/client':
+        specifier: 6.19.3
+        version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       bullmq:
         specifier: ^5.34.5
         version: 5.80.1
