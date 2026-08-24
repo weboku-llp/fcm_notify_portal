@@ -117,14 +117,45 @@ model Project {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  deviceTokens DeviceToken[]
-  segments     Segment[]
-  templates    Template[]
-  campaigns    Campaign[]
-  auditLogs    AuditLog[]
+  deviceTokens      DeviceToken[]
+  segments          Segment[]
+  templates         Template[]
+  campaigns         Campaign[]
+  auditLogs         AuditLog[]
+  cricLiveMatchAlerts CricLiveMatchAlert[]
 
   @@index([status])
   @@index([fcmProjectId])
+}
+
+/// Per-fixture live-score alert prefs (CricRumble only).
+model CricLiveMatchAlert {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  fixtureId String
+  teamHome  String?
+  teamAway  String?
+  kind      String?
+  status    String?
+
+  /// Master switch: include this match in live-score notifications.
+  alertsEnabled Boolean @default(false)
+  /// When true (and alertsEnabled), auto-send toss / match start / live score / result.
+  autoOnScoreUpdate Boolean @default(false)
+
+  /// Last score line we already notified (dedupe).
+  lastNotifiedScore String?
+  lastNotifiedAt    DateTime?
+  lastPolledAt      DateTime?
+  lastPollError     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, fixtureId])
+  @@index([projectId, alertsEnabled, autoOnScoreUpdate])
 }
 
 model DeviceToken {

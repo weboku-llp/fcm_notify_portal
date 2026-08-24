@@ -1,6 +1,7 @@
 import type {
   CampaignDeliveryPublic,
   CampaignPublic,
+  CricLiveMatchRow,
   DeviceTokenPublic,
   ProjectPublic,
   SegmentPublic,
@@ -167,4 +168,39 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // CricRumble live score alerts
+  listCricLiveMatches: (projectId: string) =>
+    request<{ matches: CricLiveMatchRow[] }>(`/projects/${projectId}/cric-live/matches`).then(
+      (r) => r.matches,
+    ),
+  updateCricLiveMatchAlert: (
+    projectId: string,
+    fixtureId: string,
+    body: {
+      alertsEnabled?: boolean;
+      autoOnScoreUpdate?: boolean;
+      teamHome?: string;
+      teamAway?: string;
+      shortHome?: string | null;
+      shortAway?: string | null;
+      scoreLine?: string | null;
+      venue?: string | null;
+      startingAt?: string | null;
+      kickoffLabel?: string | null;
+      toss?: string | null;
+      kind?: string;
+      status?: string | null;
+      phase?: import("@notif/contracts").CricNotifPhase;
+    },
+  ) =>
+    request<{
+      match: CricLiveMatchRow;
+      campaign: CampaignPublic | null;
+      enqueued: boolean;
+      sent?: boolean;
+    }>(
+      `/projects/${projectId}/cric-live/matches/${encodeURIComponent(fixtureId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
 };
