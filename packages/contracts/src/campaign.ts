@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { CampaignMode, CampaignStatus } from "./enums.js";
+import { CampaignMode, CampaignStatus, DeliveryStatus, Platform } from "./enums.js";
+import { OptionalHttpsImageUrl } from "./notification-image.js";
 
 /** The notification payload fields shared by templates and campaigns. */
 export const NotificationContent = z.object({
   title: z.string().min(1).max(500),
   body: z.string().min(1).max(4000),
-  imageUrl: z.string().url().nullable().optional(),
+  imageUrl: OptionalHttpsImageUrl,
   deepLink: z.string().max(2000).nullable().optional(),
   dataJson: z.record(z.string()).default({}),
 });
@@ -25,7 +26,7 @@ export const CreateCampaignInput = z
     // Content can be provided inline or resolved from a template.
     title: z.string().min(1).max(500).optional(),
     body: z.string().min(1).max(4000).optional(),
-    imageUrl: z.string().url().nullable().optional(),
+    imageUrl: OptionalHttpsImageUrl,
     deepLink: z.string().max(2000).nullable().optional(),
     dataJson: z.record(z.string()).default({}),
     // Targeting
@@ -92,7 +93,7 @@ export const TestSendInput = z.object({
   token: z.string().min(1),
   title: z.string().min(1).max(500),
   body: z.string().min(1).max(4000),
-  imageUrl: z.string().url().nullable().optional(),
+  imageUrl: OptionalHttpsImageUrl,
   deepLink: z.string().max(2000).nullable().optional(),
   dataJson: z.record(z.string()).default({}),
 });
@@ -130,3 +131,27 @@ export const CampaignPublic = z.object({
   updatedAt: z.string(),
 });
 export type CampaignPublic = z.infer<typeof CampaignPublic>;
+
+/** Per-device delivery outcome for a campaign (history drawer). */
+export const CampaignDeliveryPublic = z.object({
+  id: z.string(),
+  campaignId: z.string(),
+  status: DeliveryStatus,
+  error: z.string().nullable(),
+  errorCode: z.string().nullable(),
+  messageId: z.string().nullable(),
+  createdAt: z.string(),
+  tokenId: z.string().nullable(),
+  tokenPreview: z.string().nullable(),
+  platform: Platform.nullable(),
+  userId: z.string().nullable(),
+  locale: z.string().nullable(),
+});
+export type CampaignDeliveryPublic = z.infer<typeof CampaignDeliveryPublic>;
+
+export const ListCampaignDeliveriesQuery = z.object({
+  status: DeliveryStatus.optional(),
+  q: z.string().max(200).optional(),
+});
+export type ListCampaignDeliveriesQuery = z.infer<typeof ListCampaignDeliveriesQuery>;
+

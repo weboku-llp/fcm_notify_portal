@@ -1,143 +1,132 @@
 "use client";
 
 import type { CampaignMode, TemplatePublic } from "@notif/contracts";
+import { normalizeNotificationImageUrl } from "@notif/contracts";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { NotificationPreview } from "@/components/NotificationPreview";
 import { useProjects } from "@/components/ProjectContext";
 import { api, ApiError } from "@/lib/api";
+import { fcmImageWarning } from "@/lib/fcm-image";
 
-type UiTarget =
-  | "TEST_DEVICE"
-  | "INDIVIDUAL_TOKEN"
-  | "SELECTED_USERS"
-  | "ALL_REGISTERED"
-  | "PROJECT_TOPIC"
-  | "CUSTOM_TOPIC"
-  | "SEGMENT";
+type UiTarget = "ALL_REGISTERED" | "PROJECT_TOPIC" | "TEST_DEVICE";
 
 const TARGETS: { value: UiTarget; label: string; hint: string }[] = [
-  { value: "TEST_DEVICE", label: "Test device token", hint: "Send a one-off test (not a campaign)" },
-  { value: "INDIVIDUAL_TOKEN", label: "Individual device token", hint: "One or more exact FCM tokens" },
-  {
-    value: "SELECTED_USERS",
-    label: "Selected users",
-    hint: "By userId — tokens synced from the project API (or local register)",
-  },
   {
     value: "ALL_REGISTERED",
-    label: "All devices (token cache)",
-    hint: "Every active token in portal cache (synced from project API)",
+    label: "All users",
+    hint: "Send to every active device token — shows real sent / failed counts",
   },
   {
     value: "PROJECT_TOPIC",
-    label: "Project-wide topic",
-    hint: "Firebase topic broadcast (devices must subscribeToTopic)",
+    label: "Topic broadcast",
+    hint: "Firebase topic only — no per-device sent/failed counts",
   },
-  { value: "CUSTOM_TOPIC", label: "Custom topic", hint: "Any FCM topic name" },
-  { value: "SEGMENT", label: "Filtered segment", hint: "Devices matching a saved segment" },
+  {
+    value: "TEST_DEVICE",
+    label: "Test one device",
+    hint: "One-off test send — not saved as a campaign",
+  },
 ];
 
 function uiToMode(target: UiTarget): CampaignMode {
-  switch (target) {
-    case "ALL_REGISTERED":
-      return "ALL_REGISTERED";
-    case "SELECTED_USERS":
-      return "SELECTED_USERS";
-    case "INDIVIDUAL_TOKEN":
-      return "SPECIFIC_TOKENS";
-    case "SEGMENT":
-      return "SEGMENT";
-    case "PROJECT_TOPIC":
-    case "CUSTOM_TOPIC":
-    case "TEST_DEVICE":
-    default:
-      return "BROADCAST_TOPIC";
-  }
+  return target === "ALL_REGISTERED" ? "ALL_REGISTERED" : "BROADCAST_TOPIC";
 }
 
-const MIGRATION_NOTE =
-  "Portal notifications reach devices that have updated and registered with the new notification system. Use Firebase Console during the migration period to reach older app versions.";
+function renderTpl(text: string, vars: Record<string, string>): string {
+  return text.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, k: string) => {
+    const v = vars[k];
+    return v != null && v !== "" ? v : `{{${k}}}`;
+  });
+}
+
+/** Local calendar date helpers for Daily Update templates. */
+function todayParts(d = new Date()) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return {
+    dateLabel: `${d.getDate()} ${months[d.getMonth()]}`,
+    updateId: `upd-${yyyy}${mm}${dd}`,
+  };
+}
+
+function defaultVarValue(key: string): string {
+  const today = todayParts();
+  if (key === "dateLabel") return today.dateLabel;
+  if (key === "updateId") return today.updateId;
+  return "";
+}
 
 export default function NewCampaignPage() {
   const router = useRouter();
   const { selected, refresh } = useProjects();
 
-  const [target, setTarget] = useState<UiTarget>("PROJECT_TOPIC");
+  const [target, setTarget] = useState<UiTarget>("ALL_REGISTERED");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [deepLink, setDeepLink] = useState("");
   const [customData, setCustomData] = useState('{"type":"ANNOUNCEMENT"}');
-  const [targetTopic, setTargetTopic] = useState("");
-  const [segmentId, setSegmentId] = useState("");
-  const [tokensText, setTokensText] = useState("");
-  const [userIdsText, setUserIdsText] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
   const [testToken, setTestToken] = useState("");
   const [templates, setTemplates] = useState<TemplatePublic[]>([]);
   const [templateId, setTemplateId] = useState("");
-  const [templateVarsText, setTemplateVarsText] = useState("{}");
+  const [templateVars, setTemplateVars] = useState<Record<string, string>>({});
   const [activeCount, setActiveCount] = useState<number | null>(null);
-  const [estimate, setEstimate] = useState<number | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [refreshFromApiBeforeSend, setRefreshFromApiBeforeSend] = useState(true);
   const [syncBusy, setSyncBusy] = useState(false);
-
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const tokens = useMemo(
-    () => tokensText.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean),
-    [tokensText],
-  );
-  const userIds = useMemo(
-    () => userIdsText.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean),
-    [userIdsText],
-  );
 
   const loadMeta = useCallback(async () => {
     if (!selected) return;
     const [tokRes, tpls] = await Promise.all([
-      api.listTokens(selected.id, true).catch(() => ({ tokens: [], activeCount: 0, coverageNote: MIGRATION_NOTE })),
+      api.listTokens(selected.id, true).catch(() => ({ tokens: [], activeCount: 0, coverageNote: "" })),
       api.listTemplates(selected.id).catch(() => []),
     ]);
     setActiveCount(tokRes.activeCount);
     setTemplates(tpls);
-    setTargetTopic(selected.defaultBroadcastTopic);
   }, [selected]);
 
   useEffect(() => {
     void loadMeta();
   }, [loadMeta]);
 
-  useEffect(() => {
-    if (!selected || target === "TEST_DEVICE") {
-      setEstimate(null);
-      return;
-    }
-    const mode = uiToMode(target);
-    void api
-      .estimateAudience(selected.id, {
-        mode,
-        segmentId: target === "SEGMENT" ? segmentId || undefined : undefined,
-        targetUserIds: target === "SELECTED_USERS" ? userIds : undefined,
-        targetTokens: target === "INDIVIDUAL_TOKEN" ? tokens : undefined,
-      })
-      .then((r) => setEstimate(r.estimatedRecipients))
-      .catch(() => setEstimate(null));
-  }, [selected, target, segmentId, userIds, tokens]);
+  const activeTemplate = useMemo(
+    () => (templateId ? templates.find((t) => t.id === templateId) ?? null : null),
+    [templateId, templates],
+  );
 
   useEffect(() => {
-    if (!templateId) return;
-    const tpl = templates.find((t) => t.id === templateId);
-    if (!tpl) return;
-    setTitle(tpl.title);
-    setBody(tpl.body);
-    setImageUrl(tpl.imageUrl ?? "");
-    setDeepLink(tpl.deepLink ?? "");
-    setCustomData(JSON.stringify(tpl.dataJson ?? {}, null, 2));
-  }, [templateId, templates]);
+    if (!activeTemplate) {
+      setTemplateVars({});
+      return;
+    }
+    setTitle(activeTemplate.title);
+    setBody(activeTemplate.body);
+    setImageUrl(activeTemplate.imageUrl ?? "");
+    setDeepLink(activeTemplate.deepLink ?? "");
+    setCustomData(JSON.stringify(activeTemplate.dataJson ?? {}, null, 2));
+    // Auto-fill dateLabel + updateId for Daily Update-style templates.
+    setTemplateVars(
+      Object.fromEntries(activeTemplate.variables.map((v) => [v, defaultVarValue(v)])),
+    );
+  }, [activeTemplate]);
+
+  const previewTitle = activeTemplate ? renderTpl(title, templateVars) : title;
+  const previewBody = activeTemplate ? renderTpl(body, templateVars) : body;
+  const previewImage = activeTemplate ? renderTpl(imageUrl, templateVars) : imageUrl;
+  const previewDeepLink = activeTemplate ? renderTpl(deepLink, templateVars) : deepLink;
+  const imageUrlCheck = normalizeNotificationImageUrl(previewImage);
+  const imageUrlError = imageUrlCheck.ok ? null : imageUrlCheck.message;
+
+  const missingVars = activeTemplate
+    ? activeTemplate.variables.filter((v) => !(templateVars[v] ?? "").trim())
+    : [];
 
   if (!selected) {
     return (
@@ -161,45 +150,33 @@ export default function NewCampaignPage() {
     }
   }
 
-  function parseTemplateVars(): Record<string, string> {
-    try {
-      return JSON.parse(templateVarsText || "{}") as Record<string, string>;
-    } catch {
-      return {};
-    }
-  }
-
   function buildPayload(action: "draft" | "schedule" | "send_now") {
     const mode = uiToMode(target);
-    const topic =
-      target === "PROJECT_TOPIC"
-        ? selected!.defaultBroadcastTopic
-        : target === "CUSTOM_TOPIC"
-          ? targetTopic
-          : undefined;
-
     return {
       action,
       mode,
       templateId: templateId || undefined,
-      templateVariables: templateId ? parseTemplateVars() : undefined,
+      templateVariables: templateId ? templateVars : undefined,
       title: templateId ? undefined : title,
       body: templateId ? undefined : body,
-      imageUrl: imageUrl || undefined,
-      deepLink: deepLink || undefined,
-      dataJson: parseDataJson(),
-      targetTopic: mode === "BROADCAST_TOPIC" ? topic || selected!.defaultBroadcastTopic : undefined,
-      segmentId: mode === "SEGMENT" ? segmentId || undefined : undefined,
-      targetTokens: mode === "SPECIFIC_TOKENS" ? tokens : undefined,
-      targetUserIds: mode === "SELECTED_USERS" ? userIds : undefined,
-      refreshFromApiBeforeSend:
-        mode === "ALL_REGISTERED" || mode === "SELECTED_USERS" ? refreshFromApiBeforeSend : false,
+      imageUrl: templateId ? undefined : imageUrlCheck.ok ? (imageUrlCheck.imageUrl ?? undefined) : undefined,
+      deepLink: templateId ? undefined : deepLink || undefined,
+      dataJson: templateId ? undefined : parseDataJson(),
+      targetTopic: mode === "BROADCAST_TOPIC" ? selected!.defaultBroadcastTopic : undefined,
+      refreshFromApiBeforeSend: mode === "ALL_REGISTERED" ? refreshFromApiBeforeSend : false,
       scheduledAt: action === "schedule" && scheduledAt ? new Date(scheduledAt).toISOString() : undefined,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
   }
 
+  function guardImageUrl(): boolean {
+    if (!imageUrlError) return true;
+    setMsg({ ok: false, text: imageUrlError });
+    return false;
+  }
+
   async function submit(action: "draft" | "schedule" | "send_now") {
+    if (!guardImageUrl()) return;
     if (action === "send_now" && !confirmOpen) {
       setConfirmOpen(true);
       return;
@@ -213,9 +190,9 @@ export default function NewCampaignPage() {
         ok: true,
         text:
           action === "send_now"
-            ? `Campaign queued (${res.campaign.id}). Estimated recipients: ${res.campaign.estimatedRecipients ?? "n/a"}.`
+            ? `Queued. Active devices in cache: ${res.campaign.estimatedRecipients ?? activeCount ?? "n/a"}.`
             : action === "schedule"
-              ? `Campaign scheduled for ${new Date(res.campaign.scheduledAt!).toLocaleString()}.`
+              ? `Scheduled for ${new Date(res.campaign.scheduledAt!).toLocaleString()}.`
               : "Draft saved.",
       });
       setTimeout(() => router.push("/campaigns"), 900);
@@ -228,16 +205,19 @@ export default function NewCampaignPage() {
 
   async function handleTestSend() {
     if (!testToken) return;
+    if (!guardImageUrl()) return;
     setBusy(true);
     setMsg(null);
     try {
       const res = await api.testSend(selected!.id, {
         token: testToken,
-        title,
-        body,
-        imageUrl: imageUrl || undefined,
-        deepLink: deepLink || undefined,
-        dataJson: parseDataJson(),
+        title: previewTitle,
+        body: previewBody,
+        imageUrl: imageUrlCheck.ok ? (imageUrlCheck.imageUrl ?? undefined) : undefined,
+        deepLink: previewDeepLink.trim() || undefined,
+        dataJson: Object.fromEntries(
+          Object.entries(parseDataJson()).map(([k, v]) => [k, renderTpl(v, templateVars)]),
+        ),
       });
       setMsg({ ok: res.ok, text: res.ok ? "Test notification sent." : res.error ?? "Test send failed" });
     } catch (err) {
@@ -247,13 +227,14 @@ export default function NewCampaignPage() {
     }
   }
 
-  const canSubmit = Boolean(templateId) || (title.trim() && body.trim());
-  const topicLabel =
-    target === "PROJECT_TOPIC" ? selected.defaultBroadcastTopic : targetTopic || selected.defaultBroadcastTopic;
+  const canSubmit =
+    ((Boolean(templateId) && missingVars.length === 0) ||
+      (!templateId && Boolean(title.trim() && body.trim()))) &&
+    !imageUrlError;
   const apiSyncOn = Boolean(
     selected.tokenSourceEnabled && selected.tokenSourceApiBaseUrl && selected.hasTokenSourceApiKey,
   );
-  const usesTokenCache = target === "ALL_REGISTERED" || target === "SELECTED_USERS";
+  const estimate = activeCount;
 
   async function syncTokensFromProjectApi() {
     if (!selected) return;
@@ -265,26 +246,23 @@ export default function NewCampaignPage() {
       await loadMeta();
       setMsg({
         ok: res.ok,
-        text: `API sync: ${res.upserted} token(s) fetched, ${res.deactivated} deactivated. Active cache: check summary.`,
+        text: `Synced ${res.upserted} token(s)${res.deactivated ? `, deactivated ${res.deactivated}` : ""}.`,
       });
     } catch (err) {
-      setMsg({
-        ok: false,
-        text: err instanceof ApiError ? err.message : String(err),
-      });
+      setMsg({ ok: false, text: err instanceof ApiError ? err.message : String(err) });
     } finally {
       setSyncBusy(false);
     }
   }
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold">New campaign</h1>
+          <h1 className="text-2xl font-semibold">Compose</h1>
           <p className="text-sm text-slate-500">
-            Project <span className="font-medium">{selected.name}</span> ({selected.projectKey ?? selected.slug}) ·
-            Firebase <span className="font-mono text-xs">{selected.fcmProjectId}</span>
+            {selected.name} · topic{" "}
+            <code className="rounded bg-slate-100 px-1 text-xs">{selected.defaultBroadcastTopic}</code>
           </p>
         </div>
 
@@ -293,75 +271,45 @@ export default function NewCampaignPage() {
             apiSyncOn ? "border-emerald-200 bg-emerald-50 text-emerald-950" : "border-amber-200 bg-amber-50 text-amber-950"
           }`}
         >
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-semibold">Project API token sync</h2>
-                <span
-                  className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
-                    apiSyncOn ? "bg-emerald-200/80 text-emerald-900" : "bg-amber-200/80 text-amber-900"
-                  }`}
-                >
-                  {apiSyncOn ? "ON" : "OFF"}
-                </span>
-              </div>
-              {apiSyncOn ? (
-                <>
-                  <p className="mt-1 break-all font-mono text-[11px] opacity-80">{selected.tokenSourceApiBaseUrl}</p>
-                  <p className="mt-1 text-[12px]">
-                    Fetches all device tokens from the project API into the portal cache
-                    {usesTokenCache ? " (required for All devices / Selected users)." : "."}
-                  </p>
-                  {selected.tokenSourceLastSyncAt ? (
-                    <p className="mt-1 text-[12px]">
-                      Last sync: {new Date(selected.tokenSourceLastSyncAt).toLocaleString()}
-                      {selected.tokenSourceLastSyncOk ? (
-                        <> · {selected.tokenSourceLastSyncCount ?? 0} token(s)</>
-                      ) : (
-                        <> · failed: {selected.tokenSourceLastSyncError ?? "unknown"}</>
-                      )}
-                    </p>
-                  ) : (
-                    <p className="mt-1 text-[12px]">No sync yet — run Sync now to pull all user device tokens.</p>
-                  )}
-                  <p className="mt-1 font-medium">Active in portal cache: {activeCount ?? "—"}</p>
-                </>
-              ) : (
-                <p className="mt-1 text-[12px]">
-                  Main project API is not linked. Add URL + key and Test &amp; turn on in project settings before
-                  fetching all users&apos; device tokens.
-                </p>
-              )}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-medium">
+                Active devices: <span className="tabular-nums">{activeCount ?? "—"}</span>
+                {apiSyncOn ? (
+                  <span className="ml-2 text-xs font-normal opacity-80">
+                    last sync{" "}
+                    {selected.tokenSourceLastSyncAt
+                      ? new Date(selected.tokenSourceLastSyncAt).toLocaleString()
+                      : "never"}
+                  </span>
+                ) : (
+                  <span className="ml-2 text-xs font-normal">API sync off</span>
+                )}
+              </p>
             </div>
-            <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-              {apiSyncOn ? (
-                <button
-                  type="button"
-                  className="btn-secondary h-9"
-                  disabled={syncBusy || busy}
-                  onClick={() => void syncTokensFromProjectApi()}
-                >
-                  {syncBusy ? "Syncing…" : "Sync now"}
-                </button>
-              ) : (
-                <Link
-                  href={`/projects/${selected.id}?tab=settings`}
-                  className="btn-primary h-9 inline-flex items-center justify-center px-3"
-                >
-                  Configure API
-                </Link>
-              )}
-            </div>
+            {apiSyncOn ? (
+              <button
+                type="button"
+                className="btn-secondary h-9"
+                disabled={syncBusy || busy}
+                onClick={() => void syncTokensFromProjectApi()}
+              >
+                {syncBusy ? "Syncing…" : "Sync now"}
+              </button>
+            ) : (
+              <Link
+                href={`/projects/${selected.id}?tab=settings`}
+                className="btn-primary h-9 inline-flex items-center justify-center px-3"
+              >
+                Configure API
+              </Link>
+            )}
           </div>
         </section>
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-          {MIGRATION_NOTE}
-        </div>
-
         <section className="card p-6">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Target type</h2>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Send to</h2>
+          <div className="grid gap-3 sm:grid-cols-3">
             {TARGETS.map((m) => (
               <button
                 key={m.value}
@@ -372,151 +320,264 @@ export default function NewCampaignPage() {
                 }`}
               >
                 <div className="font-medium">{m.label}</div>
-                <div className="text-xs text-slate-500">{m.hint}</div>
+                <div className="mt-0.5 text-xs text-slate-500">{m.hint}</div>
               </button>
             ))}
           </div>
 
           <div className="mt-4 space-y-3">
+            {target === "ALL_REGISTERED" ? (
+              <>
+                <p className="text-sm text-slate-600">
+                  Sends to each of the <strong>{activeCount ?? 0}</strong> active device(s). History will show exact
+                  Sent / Failed counts per device.
+                </p>
+                <label className="flex items-start gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={refreshFromApiBeforeSend}
+                    onChange={(e) => setRefreshFromApiBeforeSend(e.target.checked)}
+                    disabled={!apiSyncOn}
+                  />
+                  <span>
+                    Refresh tokens from project API before send
+                    {!apiSyncOn ? (
+                      <span className="block text-xs text-amber-700">Configure API sync first.</span>
+                    ) : null}
+                  </span>
+                </label>
+              </>
+            ) : null}
             {target === "PROJECT_TOPIC" ? (
               <p className="text-sm text-slate-600">
-                Will send to topic <code className="rounded bg-slate-100 px-1">{selected.defaultBroadcastTopic}</code>
-                {selected.slug === "cricrumble" || selected.defaultBroadcastTopic === "cricrumble_all"
-                  ? " (All CricRumble Users — registered + subscribed devices only)."
-                  : "."}
+                One Firebase call to topic{" "}
+                <code className="rounded bg-slate-100 px-1">{selected.defaultBroadcastTopic}</code>. Firebase does
+                not return per-device results for topics — prefer <strong>All users</strong> when you need Sent /
+                Failed counts.
               </p>
             ) : null}
-            {target === "CUSTOM_TOPIC" ? (
+            {target === "TEST_DEVICE" ? (
               <div>
-                <label className="label">Custom topic</label>
-                <input className="input" value={targetTopic} onChange={(e) => setTargetTopic(e.target.value)} />
-              </div>
-            ) : null}
-            {target === "SEGMENT" ? (
-              <div>
-                <label className="label">Segment ID</label>
-                <input className="input" value={segmentId} onChange={(e) => setSegmentId(e.target.value)} />
-              </div>
-            ) : null}
-            {target === "INDIVIDUAL_TOKEN" || target === "TEST_DEVICE" ? (
-              <div>
-                <label className="label">Device token(s)</label>
+                <label className="label">Device token</label>
                 <textarea
-                  className="input h-24 font-mono text-xs"
-                  value={target === "TEST_DEVICE" ? testToken : tokensText}
-                  onChange={(e) =>
-                    target === "TEST_DEVICE" ? setTestToken(e.target.value) : setTokensText(e.target.value)
-                  }
-                  placeholder="FCM registration token"
+                  className="input h-20 font-mono text-xs"
+                  value={testToken}
+                  onChange={(e) => setTestToken(e.target.value)}
+                  placeholder="Paste one FCM registration token"
                 />
               </div>
-            ) : null}
-            {target === "SELECTED_USERS" ? (
-              <div>
-                <label className="label">User IDs</label>
-                <textarea
-                  className="input h-24 font-mono text-xs"
-                  value={userIdsText}
-                  onChange={(e) => setUserIdsText(e.target.value)}
-                  placeholder="One userId per line"
-                />
-              </div>
-            ) : null}
-            {target === "ALL_REGISTERED" ? (
-              <p className="text-sm text-slate-600">
-                Multicast to every <strong>active</strong> token in the portal cache
-                ({activeCount ?? 0} now). Use <strong>Sync now</strong> above to fetch all users&apos; device tokens
-                from the project API first.
-              </p>
-            ) : null}
-            {usesTokenCache ? (
-              <label className="flex items-start gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={refreshFromApiBeforeSend}
-                  onChange={(e) => setRefreshFromApiBeforeSend(e.target.checked)}
-                  disabled={!apiSyncOn}
-                />
-                <span>
-                  Live refresh from project API before send
-                  {!apiSyncOn ? (
-                    <span className="block text-xs text-amber-700">
-                      Configure project API sync first (panel above).
-                    </span>
-                  ) : (
-                    <span className="block text-xs text-slate-500">
-                      Re-fetches all device tokens from the project API, then sends via Firebase.
-                    </span>
-                  )}
-                </span>
-              </label>
             ) : null}
           </div>
-        </section>
-
-        <section className="card p-6">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Template</h2>
-          <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
-            <option value="">Inline content (no template)</option>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-          {templateId ? (
-            <div className="mt-3">
-              <label className="label">Template variables (JSON)</label>
-              <textarea
-                className="input h-28 font-mono text-xs"
-                value={templateVarsText}
-                onChange={(e) => setTemplateVarsText(e.target.value)}
-                placeholder='{"teamA":"India","teamB":"Australia","matchId":"m1","matchTime":"7:30 PM","imageUrl":"https://..."}'
-              />
-            </div>
-          ) : null}
         </section>
 
         <section className="card p-6">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Content</h2>
+          {templates.length > 0 ? (
+            <div className="mb-4">
+              <label className="label">Template (optional)</label>
+              <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+                <option value="">Write inline</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+              {activeTemplate ? (
+                <p className="mt-1.5 text-xs text-slate-500">
+                  Fill the variables below — they replace {"{{…}}"} in the template when you send.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {activeTemplate && activeTemplate.variables.length > 0 ? (
+            <div className="mb-5 space-y-3 rounded-lg border border-brand-200 bg-brand-50/60 p-4">
+              <div>
+                <p className="text-sm font-semibold text-ink">Template variables</p>
+                <p className="text-xs text-slate-500">You type today’s values here. Nothing is auto-fetched.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {activeTemplate.variables.map((key) => (
+                  <div key={key} className={key === "summary" || key === "headline" ? "sm:col-span-2" : ""}>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <label className="label mb-0">{key}</label>
+                      {key === "updateId" ? (
+                        <button
+                          type="button"
+                          className="text-xs font-medium text-brand-600 hover:text-brand-700"
+                          onClick={() =>
+                            setTemplateVars((prev) => ({ ...prev, updateId: todayParts().updateId }))
+                          }
+                        >
+                          Regenerate
+                        </button>
+                      ) : null}
+                    </div>
+                    <input
+                      className="input"
+                      value={templateVars[key] ?? ""}
+                      onChange={(e) => setTemplateVars((prev) => ({ ...prev, [key]: e.target.value }))}
+                      placeholder={
+                        key === "dateLabel"
+                          ? todayParts().dateLabel
+                          : key === "headline"
+                            ? "Padikkal ton puts India on top in Colombo"
+                            : key === "summary"
+                              ? "India 300/5 after Day 1; Australia level series vs Bangladesh"
+                              : key === "imageUrl"
+                                ? "https://…"
+                                : key === "updateId"
+                                  ? todayParts().updateId
+                                  : `Value for ${key}`
+                      }
+                      required
+                    />
+                    {key === "updateId" ? (
+                      <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                        Needed so the app can open the matching article when someone taps the
+                        notification. It becomes the deep link{" "}
+                        <code className="rounded bg-white px-1 text-[11px]">
+                          /updates/{(templateVars.updateId || todayParts().updateId).trim() || "…"}
+                        </code>
+                        .
+                      </p>
+                    ) : null}
+                    {key === "imageUrl" && imageUrlError ? (
+                      <p className="mt-1.5 text-xs leading-relaxed text-red-700">{imageUrlError}</p>
+                    ) : null}
+                    {key === "imageUrl" && !imageUrlError ? (
+                      <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                        Must be a public <code className="text-[11px]">https://</code> URL. Invalid
+                        values are blocked before send (FCM rejects them for every device).
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              {missingVars.length > 0 ? (
+                <p className="text-xs text-amber-800">Missing: {missingVars.join(", ")}</p>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="space-y-4">
             <div>
               <label className="label">Title</label>
-              <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+              <input
+                className="input"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                disabled={Boolean(activeTemplate)}
+                readOnly={Boolean(activeTemplate)}
+              />
+              {activeTemplate ? (
+                <p className="mt-1 text-xs text-slate-500">From template — rendered preview uses your variables.</p>
+              ) : null}
             </div>
             <div>
               <label className="label">Body</label>
-              <textarea className="input h-24" value={body} onChange={(e) => setBody(e.target.value)} />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="label">Image URL</label>
-                <input className="input" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Deep link</label>
-                <input className="input" value={deepLink} onChange={(e) => setDeepLink(e.target.value)} />
-              </div>
+              <textarea
+                className="input h-24"
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                disabled={Boolean(activeTemplate)}
+                readOnly={Boolean(activeTemplate)}
+              />
             </div>
             <div>
-              <label className="label">Custom data (JSON string map)</label>
-              <textarea className="input h-24 font-mono text-xs" value={customData} onChange={(e) => setCustomData(e.target.value)} />
+              <label className="label">Image URL</label>
+              <input
+                className={`input ${imageUrlError ? "border-red-400 focus:border-red-500 focus:ring-red-200" : ""}`}
+                type={activeTemplate ? "text" : "url"}
+                value={imageUrl}
+                onChange={(e) => setImageUrl(e.target.value)}
+                placeholder="https://cdn.example.com/notification-image.png"
+                disabled={Boolean(activeTemplate)}
+                readOnly={Boolean(activeTemplate)}
+              />
+              {imageUrlError ? (
+                <p className="mt-1.5 text-xs leading-relaxed text-red-700">{imageUrlError}</p>
+              ) : (() => {
+                const warn = fcmImageWarning(previewImage);
+                return warn ? (
+                  <p className="mt-1.5 text-xs leading-relaxed text-amber-800">
+                    {warn} Browser preview can still show it even when phones cannot download it.
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Optional. Public https URL ending in .jpg / .png / .webp — Google thumbnail /
+                    gstatic links usually fail on devices.
+                  </p>
+                );
+              })()}
+              {previewImage.trim() && /^https?:\/\//i.test(previewImage.trim()) ? (
+                <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={previewImage.trim()}
+                    alt="Notification preview"
+                    className="max-h-40 w-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                </div>
+              ) : null}
             </div>
-            <div className="grid gap-4 sm:grid-cols-2 text-sm text-slate-500">
-              <p>Android channel: {selected.androidChannelId ?? "project default / none"}</p>
-              <p>iOS: APNs via Firebase project credentials on the worker</p>
+            <div>
+              <label className="label">Deep link</label>
+              <input
+                className="input"
+                value={deepLink}
+                onChange={(e) => setDeepLink(e.target.value)}
+                placeholder={`/updates/${todayParts().updateId}`}
+                disabled={Boolean(activeTemplate)}
+                readOnly={Boolean(activeTemplate)}
+              />
+              {!activeTemplate ? (
+                <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                  Needed so the app opens the right screen when someone taps the notification.
+                  For Daily Updates use{" "}
+                  <code className="rounded bg-slate-100 px-1 text-[11px]">
+                    /updates/{todayParts().updateId}
+                  </code>
+                  .
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">
+                  From template — uses your <code className="text-[11px]">updateId</code> variable.
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="label">Custom data (JSON)</label>
+              <textarea
+                className="input h-20 font-mono text-xs"
+                value={customData}
+                onChange={(e) => setCustomData(e.target.value)}
+                disabled={Boolean(activeTemplate)}
+                readOnly={Boolean(activeTemplate)}
+              />
             </div>
           </div>
         </section>
 
         <section className="card p-6">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Schedule</h2>
-          <input type="datetime-local" className="input max-w-xs" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Schedule (optional)</h2>
+          <input
+            type="datetime-local"
+            className="input max-w-xs"
+            value={scheduledAt}
+            onChange={(e) => setScheduledAt(e.target.value)}
+          />
         </section>
 
         {msg ? (
-          <div className={`rounded-lg p-3 text-sm ${msg.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
+          <div
+            className={`rounded-lg p-3 text-sm ${msg.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}
+          >
             {msg.text}
           </div>
         ) : null}
@@ -528,13 +589,17 @@ export default function NewCampaignPage() {
             </button>
           ) : (
             <>
-              <button className="btn-secondary" disabled={busy || !canSubmit} onClick={() => submit("draft")}>
+              <button className="btn-secondary" disabled={busy || !canSubmit} onClick={() => void submit("draft")}>
                 Save draft
               </button>
-              <button className="btn-secondary" disabled={busy || !canSubmit || !scheduledAt} onClick={() => submit("schedule")}>
+              <button
+                className="btn-secondary"
+                disabled={busy || !canSubmit || !scheduledAt}
+                onClick={() => void submit("schedule")}
+              >
                 Schedule
               </button>
-              <button className="btn-primary" disabled={busy || !canSubmit} onClick={() => submit("send_now")}>
+              <button className="btn-primary" disabled={busy || !canSubmit} onClick={() => void submit("send_now")}>
                 Send now
               </button>
             </>
@@ -545,15 +610,14 @@ export default function NewCampaignPage() {
           <div className="card border-brand-200 bg-brand-50 p-5 text-sm">
             <p className="font-semibold">Confirm send</p>
             <ul className="mt-2 list-inside list-disc text-slate-700">
-              <li>Project: {selected.name}</li>
-              <li>Target: {TARGETS.find((t) => t.value === target)?.label}</li>
-              <li>Topic / value: {target.includes("TOPIC") ? topicLabel : target}</li>
-              <li>Estimated recipients: {estimate ?? "n/a"}</li>
-              <li>Title: {title}</li>
+              <li>{TARGETS.find((t) => t.value === target)?.label}</li>
+              {target === "PROJECT_TOPIC" ? <li>Topic: {selected.defaultBroadcastTopic}</li> : null}
+              <li>Devices: {estimate ?? "—"}</li>
+              {previewImage.trim() ? <li>Image: {previewImage.trim()}</li> : null}
+              <li>Title: {previewTitle}</li>
             </ul>
-            <p className="mt-3 text-amber-800">{MIGRATION_NOTE}</p>
             <div className="mt-4 flex gap-2">
-              <button className="btn-primary" disabled={busy} onClick={() => submit("send_now")}>
+              <button className="btn-primary" disabled={busy} onClick={() => void submit("send_now")}>
                 Confirm &amp; queue
               </button>
               <button className="btn-secondary" onClick={() => setConfirmOpen(false)}>
@@ -569,66 +633,49 @@ export default function NewCampaignPage() {
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Summary</h2>
           <dl className="space-y-2 text-sm">
             <div className="flex justify-between gap-2">
-              <dt className="text-slate-500">API sync</dt>
-              <dd className={`font-medium ${apiSyncOn ? "text-emerald-700" : "text-amber-700"}`}>
-                {apiSyncOn ? "ON" : "OFF"}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-2">
-              <dt className="text-slate-500">Cached tokens</dt>
-              <dd className="font-medium">{activeCount ?? "—"}</dd>
+              <dt className="text-slate-500">Active devices</dt>
+              <dd className="font-medium tabular-nums">{activeCount ?? "—"}</dd>
             </div>
             <div className="flex justify-between gap-2">
               <dt className="text-slate-500">Estimated recipients</dt>
-              <dd className="font-medium">{estimate ?? "—"}</dd>
+              <dd className="font-medium tabular-nums">{target === "TEST_DEVICE" ? "1" : (estimate ?? "—")}</dd>
             </div>
             <div className="flex justify-between gap-2">
-              <dt className="text-slate-500">Target type</dt>
+              <dt className="text-slate-500">Send to</dt>
               <dd className="font-medium text-right">{TARGETS.find((t) => t.value === target)?.label}</dd>
             </div>
-            {apiSyncOn && selected.tokenSourceLastSyncAt ? (
-              <div className="border-t border-slate-100 pt-2 text-[11px] text-slate-500">
-                Last API sync {new Date(selected.tokenSourceLastSyncAt).toLocaleString()}
-                {selected.tokenSourceLastSyncOk
-                  ? ` · ${selected.tokenSourceLastSyncCount ?? 0} pulled`
-                  : " · failed"}
-              </div>
-            ) : null}
           </dl>
-          {apiSyncOn ? (
-            <button
-              type="button"
-              className="btn-secondary mt-3 w-full"
-              disabled={syncBusy || busy}
-              onClick={() => void syncTokensFromProjectApi()}
-            >
-              {syncBusy ? "Syncing…" : "Sync tokens from API"}
-            </button>
-          ) : (
-            <Link
-              href={`/projects/${selected.id}?tab=settings`}
-              className="btn-secondary mt-3 flex h-9 w-full items-center justify-center"
-            >
-              Configure API sync
-            </Link>
-          )}
+          {target === "PROJECT_TOPIC" ? (
+            <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+              Topic broadcast cannot report per-device Sent / Failed. Use All users for those counts.
+            </p>
+          ) : null}
         </div>
 
         <div className="card p-5">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Template preview</h2>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <p className="truncate text-sm font-semibold">{title || "Notification title"}</p>
-            <p className="text-sm text-slate-600">{body || "Notification body text will appear here."}</p>
-            {imageUrl ? <p className="mt-1 truncate text-xs text-brand-600">{imageUrl}</p> : null}
-            {deepLink ? <p className="truncate text-xs text-slate-500">Deep link: {deepLink}</p> : null}
-          </div>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Preview</h2>
+          <NotificationPreview
+            title={previewTitle}
+            body={previewBody}
+            imageUrl={previewImage}
+            appName={selected.name}
+            appSlug={selected.slug}
+            logoUrl={selected.logoUrl}
+          />
+          {previewDeepLink.trim() ? (
+            <p className="mt-3 truncate font-mono text-[11px] text-slate-500">→ {previewDeepLink.trim()}</p>
+          ) : null}
         </div>
 
         <div className="card p-5">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Test send</h2>
-          <label className="label">Test device token</label>
-          <input className="input" value={testToken} onChange={(e) => setTestToken(e.target.value)} />
-          <button className="btn-secondary mt-3 w-full" disabled={busy || !testToken || !canSubmit} onClick={handleTestSend}>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">Quick test</h2>
+          <label className="label">Device token</label>
+          <input className="input font-mono text-xs" value={testToken} onChange={(e) => setTestToken(e.target.value)} />
+          <button
+            className="btn-secondary mt-3 w-full"
+            disabled={busy || !testToken || !canSubmit}
+            onClick={handleTestSend}
+          >
             Send test
           </button>
         </div>

@@ -6,10 +6,11 @@ import {
   type UpdateProjectInput,
 } from "@notif/contracts";
 import { prisma, type Project } from "@notif/db";
-import { encryptServiceAccount, maskFingerprint } from "@notif/crypto";
+import { decryptServiceAccount, encryptServiceAccount, maskFingerprint } from "@notif/crypto";
 import { writeAuditLog } from "./audit.js";
 import { DomainError } from "./errors.js";
 import { getFcmSender } from "./fcm/index.js";
+import { evictApp } from "./fcm/firebase.js";
 import { countActiveDevices, hashRegistrationSecret } from "./tokens.js";
 import { encryptTokenSourceApiKey } from "./token-source.js";
 
@@ -22,6 +23,7 @@ export function toPublicProject(p: Project, activeDeviceCount?: number): Project
     name: p.name,
     slug: p.slug,
     projectKey: p.slug,
+    logoUrl: p.logoUrl ?? null,
     fcmProjectId: p.fcmProjectId,
     fcmAppId: p.fcmAppId,
     fcmClientEmail: p.fcmClientEmail,
@@ -50,12 +52,29 @@ export async function testServiceAccount(sa: ServiceAccount): Promise<TestCreden
     projectId: `probe-${sa.project_id}`,
     serviceAccount: sa,
   });
+  let error = result.error;
+  if (error && /DECODER routines::unsupported|Failed to parse private key/i.test(error)) {
+    error =
+      "Private key could not be parsed. Re-download the JSON from Firebase Console → Service accounts → Generate new private key, then upload the file (don’t re-type the key).";
+  }
   return {
     ok: result.ok,
     fcmProjectId: result.fcmProjectId,
     clientEmail: result.clientEmail,
-    error: result.error,
+    error,
   };
+}
+
+/**
+ * Re-verify the credentials already stored for a project (no re-upload needed) —
+ * decrypts the saved service account and mints a fresh Firebase access token.
+ * Used to show "Configured — connection established" without asking the user
+ * to paste the JSON again.
+ */
+export async function verifyProjectCredentials(id: string): Promise<TestCredentialsResult> {
+  const project = await getProjectOrThrow(id);
+  const sa = decryptServiceAccount(project.fcmServiceAccountJson);
+  return testServiceAccount(sa);
 }
 
 export async function createProject(input: CreateProjectInput): Promise<ProjectPublic> {
@@ -72,6 +91,7 @@ export async function createProject(input: CreateProjectInput): Promise<ProjectP
     data: {
       name: input.name,
       slug: input.slug,
+      logoUrl: input.logoUrl ?? null,
       fcmServiceAccountJson: enc.ciphertext,
       credentialFingerprint: enc.credentialFingerprint,
       fcmProjectId: enc.fcmProjectId,
@@ -128,6 +148,7 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
 
   const data: Record<string, unknown> = {};
   if (input.name !== undefined) data.name = input.name;
+  if (input.logoUrl !== undefined) data.logoUrl = input.logoUrl;
   if (input.defaultBroadcastTopic !== undefined) data.defaultBroadcastTopic = input.defaultBroadcastTopic;
   if (input.androidChannelId !== undefined) data.androidChannelId = input.androidChannelId;
   if (input.fcmAppId !== undefined) data.fcmAppId = input.fcmAppId;
@@ -162,6 +183,9 @@ export async function updateProject(id: string, input: UpdateProjectInput): Prom
   }
 
   const updated = await prisma.project.update({ where: { id }, data });
+  if (input.fcmServiceAccountJson !== undefined) {
+    await evictApp(id).catch(() => undefined);
+  }
   await writeAuditLog({
     projectId: updated.id,
     action: "PROJECT_UPDATED",

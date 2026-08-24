@@ -3,21 +3,42 @@
 import type { ProjectPublic } from "@notif/contracts";
 import {
   ArrowLeft,
+  CheckCircle2,
+  ImagePlus,
   KeyRound,
   LayoutTemplate,
   Loader2,
+  RefreshCw,
   Settings2,
+  Trash2,
+  XCircle,
 } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectTemplatesPanel } from "@/components/ProjectTemplatesPanel";
+import { ProjectIcon, ProjectIconPlaceholder } from "@/components/ProjectIcon";
 import { useProjects } from "@/components/ProjectContext";
 import { api, ApiError } from "@/lib/api";
 import { projectLogo } from "@/lib/brand";
 
 type Tab = "settings" | "credentials" | "templates";
+
+/** Prefer the specific field-level Zod issue over the generic "Request validation failed" wrapper. */
+function friendlyApiErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    const details = err.details;
+    if (Array.isArray(details) && details.length > 0) {
+      const first = details[0] as { message?: string; path?: unknown[] } | undefined;
+      if (first?.message) {
+        const field = Array.isArray(first.path) && first.path.length > 0 ? `${first.path.join(".")}: ` : "";
+        return `${field}${first.message}`;
+      }
+    }
+    return err.message;
+  }
+  return err instanceof Error ? err.message : "Request failed";
+}
 
 function parseTab(value: string | null): Tab {
   if (value === "credentials" || value === "templates" || value === "settings") return value;
@@ -53,12 +74,46 @@ export default function ProjectDetailPage() {
   const [tokenSourceBusy, setTokenSourceBusy] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  /** Pending logo override: string = set, null = clear, undefined = unchanged */
+  const [logoDraft, setLogoDraft] = useState<string | null | undefined>(undefined);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const logoFileRef = useRef<HTMLInputElement>(null);
 
   // Credentials form
   const [json, setJson] = useState("");
+  const [credFileName, setCredFileName] = useState<string | null>(null);
+  const [lastSavedFileName, setLastSavedFileName] = useState<string | null>(null);
   const [credBusy, setCredBusy] = useState(false);
   const [credTest, setCredTest] = useState<{ ok: boolean; text: string } | null>(null);
   const [credMsg, setCredMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const credFileRef = useRef<HTMLInputElement>(null);
+
+  // Live check of the credentials already stored for this project (no re-upload needed).
+  const [verify, setVerify] = useState<{ loading: boolean; ok: boolean | null; text: string }>({
+    loading: false,
+    ok: null,
+    text: "",
+  });
+
+  const verifyConnection = useCallback(async () => {
+    setVerify({ loading: true, ok: null, text: "" });
+    try {
+      const res = await api.verifyCredentials(id);
+      setVerify({
+        loading: false,
+        ok: res.ok,
+        text: res.ok
+          ? `${res.fcmProjectId} / ${res.clientEmail}`
+          : res.error ?? "Connection failed",
+      });
+    } catch (err) {
+      setVerify({
+        loading: false,
+        ok: false,
+        text: err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Connection failed",
+      });
+    }
+  }, [id]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,6 +128,7 @@ export default function ProjectDetailPage() {
       setStatus(p.status);
       setTokenSourceApiBaseUrl(p.tokenSourceApiBaseUrl ?? "");
       setTokenSourceEnabled(p.tokenSourceEnabled);
+      setLogoDraft(undefined);
       selectProject(p.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load project");
@@ -85,6 +141,13 @@ export default function ProjectDetailPage() {
     void load();
   }, [load]);
 
+  // Check the stored credentials still work as soon as the project loads, so the
+  // Credentials tab can show "Configured — connection established" without the
+  // user having to paste the JSON again or click a button first.
+  useEffect(() => {
+    void verifyConnection();
+  }, [verifyConnection]);
+
   const settingsDirty = useMemo(() => {
     if (!project) return false;
     return (
@@ -93,11 +156,77 @@ export default function ProjectDetailPage() {
       (androidChannelId || "") !== (project.androidChannelId ?? "") ||
       (fcmAppId || "") !== (project.fcmAppId ?? "") ||
       status !== project.status ||
-      registrationSecret.trim().length > 0
+      registrationSecret.trim().length > 0 ||
+      logoDraft !== undefined ||
+      tokenSourceApiBaseUrl.trim() !== (project.tokenSourceApiBaseUrl ?? "") ||
+      tokenSourceApiKey.trim().length >= 16
     );
-  }, [project, name, defaultBroadcastTopic, androidChannelId, fcmAppId, status, registrationSecret]);
+  }, [
+    project,
+    name,
+    defaultBroadcastTopic,
+    androidChannelId,
+    fcmAppId,
+    status,
+    registrationSecret,
+    logoDraft,
+    tokenSourceApiBaseUrl,
+    tokenSourceApiKey,
+  ]);
 
   const credentialsDirty = json.trim().length > 0;
+
+  const draftCredSummary = useMemo(() => {
+    const raw = json.trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const projectId = typeof parsed.project_id === "string" ? parsed.project_id : null;
+      const clientEmail = typeof parsed.client_email === "string" ? parsed.client_email : null;
+      const privateKeyId = typeof parsed.private_key_id === "string" ? parsed.private_key_id : null;
+      const hasPrivateKey =
+        typeof parsed.private_key === "string" && parsed.private_key.includes("PRIVATE KEY");
+      if (!projectId && !clientEmail) return null;
+      return { projectId, clientEmail, privateKeyId, hasPrivateKey };
+    } catch {
+      return { error: "JSON is not valid yet" as const };
+    }
+  }, [json]);
+
+  const displayLogo = useMemo(() => {
+    if (!project) return null;
+    if (logoDraft === null) return projectLogo({ ...project, logoUrl: null });
+    if (typeof logoDraft === "string") return projectLogo({ ...project, logoUrl: logoDraft });
+    return projectLogo(project);
+  }, [project, logoDraft]);
+
+  async function onLogoFile(file: File | null) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setSettingsMsg({ ok: false, text: "Choose an image file (PNG, JPG, WebP, or SVG)." });
+      return;
+    }
+    if (file.size > 512_000) {
+      setSettingsMsg({ ok: false, text: "Icon must be 512 KB or smaller." });
+      return;
+    }
+    setLogoBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      });
+      setLogoDraft(dataUrl);
+      setSettingsMsg(null);
+    } catch (err) {
+      setSettingsMsg({ ok: false, text: err instanceof Error ? err.message : "Failed to read image" });
+    } finally {
+      setLogoBusy(false);
+      if (logoFileRef.current) logoFileRef.current.value = "";
+    }
+  }
 
   async function saveSettings(e: React.FormEvent) {
     if (!settingsDirty) return;
@@ -105,6 +234,9 @@ export default function ProjectDetailPage() {
     setSettingsBusy(true);
     setSettingsMsg(null);
     try {
+      const baseUrl = tokenSourceApiBaseUrl.trim();
+      const apiKeyChanged = tokenSourceApiKey.trim().length >= 16;
+      const urlChanged = baseUrl !== (project?.tokenSourceApiBaseUrl ?? "");
       const updated = await api.updateProject(id, {
         name,
         defaultBroadcastTopic,
@@ -114,16 +246,27 @@ export default function ProjectDetailPage() {
         ...(registrationSecret.trim().length >= 16
           ? { registrationSecret: registrationSecret.trim() }
           : {}),
+        ...(logoDraft !== undefined ? { logoUrl: logoDraft } : {}),
+        tokenSourceApiBaseUrl: baseUrl || null,
+        ...(apiKeyChanged ? { tokenSourceApiKey: tokenSourceApiKey.trim() } : {}),
+        // Saving credentials does not enable sync — use Test & turn on for that.
+        ...(urlChanged || apiKeyChanged ? { tokenSourceEnabled: false } : {}),
       });
       setProject(updated);
       setRegistrationSecret("");
+      setTokenSourceApiKey("");
+      setTokenSourceApiBaseUrl(updated.tokenSourceApiBaseUrl ?? "");
+      setTokenSourceEnabled(updated.tokenSourceEnabled);
+      setLogoDraft(undefined);
       await refresh();
-      setSettingsMsg({ ok: true, text: "Settings saved." });
-    } catch (err) {
       setSettingsMsg({
-        ok: false,
-        text: err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Save failed",
+        ok: true,
+        text: updated.tokenSourceApiBaseUrl
+          ? "Settings saved (including Main API URL/key). Sync stays OFF until Test & turn on succeeds."
+          : "Settings saved.",
       });
+    } catch (err) {
+      setSettingsMsg({ ok: false, text: friendlyApiErrorMessage(err) });
     } finally {
       setSettingsBusy(false);
     }
@@ -141,7 +284,7 @@ export default function ProjectDetailPage() {
           : res.error ?? "Invalid credentials",
       });
     } catch (err) {
-      setCredTest({ ok: false, text: err instanceof Error ? err.message : "Test failed" });
+      setCredTest({ ok: false, text: friendlyApiErrorMessage(err) });
     } finally {
       setCredBusy(false);
     }
@@ -151,20 +294,22 @@ export default function ProjectDetailPage() {
     e.preventDefault();
     setCredBusy(true);
     setCredMsg(null);
+    setCredTest(null);
     try {
       const updated = await api.updateProject(id, { fcmServiceAccountJson: json });
       setProject(updated);
+      if (credFileName) setLastSavedFileName(credFileName);
       setJson("");
+      setCredFileName(null);
+      if (credFileRef.current) credFileRef.current.value = "";
       await refresh();
+      await verifyConnection();
       setCredMsg({
         ok: true,
-        text: `Credentials updated. Fingerprint ${updated.credentialFingerprint}. Raw JSON is never stored in the browser after save.`,
+        text: `Saved for ${updated.fcmProjectId}. Private key is encrypted in the database — the paste box is cleared on purpose.`,
       });
     } catch (err) {
-      setCredMsg({
-        ok: false,
-        text: err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Update failed",
-      });
+      setCredMsg({ ok: false, text: friendlyApiErrorMessage(err) });
     } finally {
       setCredBusy(false);
     }
@@ -193,7 +338,55 @@ export default function ProjectDetailPage() {
     );
   }
 
-  const logo = projectLogo(project.slug);
+  function renderConnectionStatus() {
+    return (
+      <div
+        className={`flex flex-wrap items-center justify-between gap-3 border px-4 py-3 text-[13px] ${
+          verify.ok === true
+            ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+            : verify.ok === false
+              ? "border-red-300 bg-red-50 text-red-800"
+              : "border-line bg-surface-raised text-ink-mute"
+        }`}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          {verify.loading ? (
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          ) : verify.ok === true ? (
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+          ) : verify.ok === false ? (
+            <XCircle className="h-4 w-4 shrink-0" />
+          ) : (
+            <KeyRound className="h-4 w-4 shrink-0" />
+          )}
+          <span className="min-w-0">
+            <span className="font-medium">
+              {verify.loading
+                ? "Checking connection…"
+                : verify.ok === true
+                  ? "Configured — connection established"
+                  : verify.ok === false
+                    ? "Connection failed"
+                    : "Not verified yet"}
+            </span>
+            {!verify.loading && verify.text ? (
+              <span className="ml-1.5 break-all font-mono text-[11px] opacity-80">{verify.text}</span>
+            ) : null}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="btn-secondary h-7 shrink-0 px-2 text-[12px]"
+          disabled={verify.loading}
+          onClick={() => void verifyConnection()}
+        >
+          <RefreshCw className={`h-3 w-3 ${verify.loading ? "animate-spin" : ""}`} />
+          Recheck
+        </button>
+      </div>
+    );
+  }
+
   const tabs: { id: Tab; label: string; icon: typeof Settings2 }[] = [
     { id: "settings", label: "Settings", icon: Settings2 },
     { id: "credentials", label: "Firebase credentials", icon: KeyRound },
@@ -207,11 +400,11 @@ export default function ProjectDetailPage() {
           <button type="button" className="btn-secondary h-9 px-2.5" onClick={() => router.push("/projects")}>
             <ArrowLeft className="h-3.5 w-3.5" />
           </button>
-          {logo ? (
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center bg-black p-1">
-              <Image src={logo.src} alt={logo.alt} width={48} height={48} className="h-12 w-12 object-contain" />
-            </div>
-          ) : null}
+          {displayLogo ? (
+            <ProjectIcon src={displayLogo.src} alt={displayLogo.alt} boxClassName="h-14 w-14" darkBox />
+          ) : (
+            <ProjectIconPlaceholder name={project.name} />
+          )}
           <div>
             <h1 className="text-[26px] font-semibold tracking-tight text-ink">{project.name}</h1>
             <p className="mt-0.5 font-mono text-[12px] text-ink-mute">
@@ -258,7 +451,50 @@ export default function ProjectDetailPage() {
         <form onSubmit={saveSettings} className="max-w-3xl space-y-4 border border-line bg-surface-card p-5">
           <div>
             <h2 className="text-[15px] font-semibold text-ink">Project settings</h2>
-            <p className="mt-0.5 text-[13px] text-ink-mute">Name, topic, app id, and registration secret.</p>
+            <p className="mt-0.5 text-[13px] text-ink-mute">Name, icon, topic, app id, and registration secret.</p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4 border border-line bg-surface-raised p-4">
+            {displayLogo ? (
+              <ProjectIcon src={displayLogo.src} alt={displayLogo.alt} boxClassName="h-16 w-16" darkBox />
+            ) : (
+              <ProjectIconPlaceholder name={name || project.name} boxClassName="h-16 w-16" />
+            )}
+            <div className="min-w-0 flex-1 space-y-2">
+              <p className="text-[13px] font-medium text-ink">Project icon</p>
+              <p className="text-[12px] text-ink-mute">
+                PNG, JPG, WebP, or SVG · max 512 KB. Shown on the projects list and sidebar.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  ref={logoFileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  className="hidden"
+                  onChange={(e) => void onLogoFile(e.target.files?.[0] ?? null)}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary h-8 px-2.5 text-[12px]"
+                  disabled={logoBusy || settingsBusy}
+                  onClick={() => logoFileRef.current?.click()}
+                >
+                  {logoBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
+                  {displayLogo ? "Change icon" : "Add icon"}
+                </button>
+                {displayLogo || project.logoUrl ? (
+                  <button
+                    type="button"
+                    className="btn-secondary h-8 px-2.5 text-[12px]"
+                    disabled={settingsBusy}
+                    onClick={() => setLogoDraft(null)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Remove
+                  </button>
+                ) : null}
+              </div>
+            </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -291,17 +527,23 @@ export default function ProjectDetailPage() {
               <input className="input" value={androidChannelId} onChange={(e) => setChannel(e.target.value)} />
             </div>
             <div className="sm:col-span-2">
-              <label className="label">
-                Mobile registration secret {project.hasRegistrationSecret ? "(set — leave blank to keep)" : ""}
-              </label>
+              <label className="label">Mobile registration secret</label>
               <input
                 className="input font-mono text-[12px]"
                 type="password"
                 value={registrationSecret}
                 onChange={(e) => setRegistrationSecret(e.target.value)}
-                placeholder="min 16 chars — hashed at rest"
+                placeholder={
+                  project.hasRegistrationSecret
+                    ? "••••••••••••••••  (saved — type a new value only to replace)"
+                    : "min 16 chars — hashed at rest"
+                }
+                autoComplete="new-password"
                 minLength={registrationSecret ? 16 : undefined}
               />
+              {project.hasRegistrationSecret && !registrationSecret ? (
+                <p className="mt-1 text-[11px] text-emerald-700">Saved in database. Field stays empty on purpose — secrets are never shown again.</p>
+              ) : null}
             </div>
           </div>
 
@@ -310,8 +552,9 @@ export default function ProjectDetailPage() {
               <div>
                 <h3 className="text-[14px] font-semibold text-ink">Main project API</h3>
                 <p className="mt-0.5 text-[12px] text-ink-mute">
-                  Enter this project&apos;s backend URL, then <span className="font-medium">Test &amp; turn on</span>.
-                  Sync turns <span className="font-medium">ON</span> only when the tokens endpoint returns{" "}
+                  Use the <span className="font-medium">CricRumble backend</span> URL (not this portal).{" "}
+                  <span className="font-medium">Save settings</span> stores URL/key with sync OFF.{" "}
+                  <span className="font-medium">Test &amp; turn on</span> enables sync only on{" "}
                   <span className="font-mono">HTTP 200</span>.
                 </p>
               </div>
@@ -334,24 +577,32 @@ export default function ProjectDetailPage() {
                   setTokenSourceApiBaseUrl(e.target.value);
                   setTokenSourceEnabled(false);
                 }}
-                placeholder="http://localhost:4000 or https://api.cricrumble.com"
+                placeholder="http://localhost:3001 or https://api.cricrumble.com"
               />
               <p className="mt-1 text-[11px] text-ink-faint">
                 Probes <span className="font-mono">GET {"{url}"}/api/internal/notif-portal/tokens</span>
               </p>
             </div>
             <div>
-              <label className="label">
-                API key {project.hasTokenSourceApiKey ? "(set — leave blank to keep)" : "(required first time)"}
-              </label>
+              <label className="label">API key</label>
               <input
                 className="input font-mono text-[12px]"
                 type="password"
                 value={tokenSourceApiKey}
                 onChange={(e) => setTokenSourceApiKey(e.target.value)}
-                placeholder="same as NOTIF_PORTAL_TOKEN_EXPORT_KEY on project API"
+                placeholder={
+                  project.hasTokenSourceApiKey
+                    ? "••••••••••••••••  (saved — type a new value only to replace)"
+                    : "same as NOTIF_PORTAL_TOKEN_EXPORT_KEY on project API"
+                }
+                autoComplete="new-password"
                 minLength={tokenSourceApiKey ? 16 : undefined}
               />
+              {project.hasTokenSourceApiKey && !tokenSourceApiKey ? (
+                <p className="mt-1 text-[11px] text-emerald-700">Saved in database. Field stays empty on purpose — secrets are never shown again.</p>
+              ) : !project.hasTokenSourceApiKey ? (
+                <p className="mt-1 text-[11px] text-amber-700">Required the first time before Test &amp; turn on.</p>
+              ) : null}
             </div>
             {project.tokenSourceLastSyncAt ? (
               <p className="text-[12px] text-ink-soft">
@@ -391,7 +642,7 @@ export default function ProjectDetailPage() {
                       ok: res.ok,
                       text: res.ok
                         ? `HTTP ${res.httpStatus ?? 200} — token sync ON. Sample: ${res.tokenCountSample ?? 0} token(s).`
-                        : `HTTP ${res.httpStatus ?? "—"} — sync left OFF. ${res.error ?? "Test failed"}`,
+                        : `URL/key saved. HTTP ${res.httpStatus ?? "—"} — sync left OFF. ${res.error ?? "Test failed"}. Point Main API at the CricRumble backend (not portal :4000).`,
                     });
                   } catch (err) {
                     setTokenSourceEnabled(false);
@@ -484,9 +735,17 @@ export default function ProjectDetailPage() {
             <h2 className="text-[15px] font-semibold text-ink">Firebase Admin SDK credentials</h2>
             <p className="mt-0.5 text-[13px] text-ink-mute">
               Same private key JSON Firebase Console generates under Project settings → Service accounts.
-              Stored encrypted on the server — never shown again in this portal.
+              Stored encrypted on the server — the paste box is cleared after a successful save (that means it worked).
             </p>
+            {project.fcmProjectId === "cricrumble-fcm" || project.fcmClientEmail.includes("cricrumble-fcm") ? (
+              <p className="mt-2 border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+                Still using seed/demo credentials. Upload your real Firebase JSON below and click{" "}
+                <span className="font-medium">Update credentials</span> — the red “Connection failed” banner is from the old demo key.
+              </p>
+            ) : null}
           </div>
+
+          {renderConnectionStatus()}
 
           <ol className="list-decimal space-y-1.5 border border-line bg-surface-raised px-4 py-3 pl-8 text-[12px] text-ink-soft">
             <li>
@@ -505,47 +764,109 @@ export default function ProjectDetailPage() {
             <li>Test, then Update — set <span className="font-mono">FCM_DRIVER=firebase</span> on API/worker for live sends</li>
           </ol>
 
-          <dl className="grid gap-2 border border-line bg-surface-raised p-3 text-[12px]">
-            <div className="flex justify-between gap-3">
-              <dt className="text-ink-faint">Linked FCM project</dt>
-              <dd className="font-mono text-ink-soft">{project.fcmProjectId}</dd>
+          <div className="space-y-2 border border-emerald-200 bg-emerald-50/70 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[13px] font-semibold text-emerald-900">Stored credentials</p>
+              <span className="rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                Encrypted at rest
+              </span>
             </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-ink-faint">Service account</dt>
-              <dd className="truncate font-mono text-ink-soft">{project.fcmClientEmail}</dd>
-            </div>
-            <div className="flex justify-between gap-3">
-              <dt className="text-ink-faint">Fingerprint</dt>
-              <dd className="font-mono text-ink-soft">{project.credentialFingerprint}</dd>
-            </div>
-          </dl>
+            <dl className="grid gap-2 text-[12px]">
+              <div className="flex justify-between gap-3">
+                <dt className="text-emerald-800/70">FCM project</dt>
+                <dd className="font-mono text-emerald-950">{project.fcmProjectId}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-emerald-800/70">Service account</dt>
+                <dd className="truncate font-mono text-emerald-950">{project.fcmClientEmail}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-emerald-800/70">Fingerprint</dt>
+                <dd className="font-mono text-emerald-950">{project.credentialFingerprint}</dd>
+              </div>
+              {lastSavedFileName ? (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-emerald-800/70">Last uploaded file</dt>
+                  <dd className="truncate font-mono text-emerald-950">{lastSavedFileName}</dd>
+                </div>
+              ) : null}
+            </dl>
+            <p className="text-[11px] text-emerald-800/80">
+              The private key itself is never shown again after save. Use Recheck above to confirm Firebase accepts it.
+            </p>
+          </div>
 
-          <div>
-            <label className="label">Private key JSON file</label>
-            <input
-              type="file"
-              accept="application/json,.json"
-              className="mb-2 block w-full text-[12px] text-ink-mute file:mr-3 file:rounded file:border file:border-line file:bg-surface-raised file:px-3 file:py-1.5 file:text-[12px] file:font-medium file:text-ink"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                const text = await file.text();
-                setJson(text);
-                setCredTest(null);
-                setCredMsg(null);
-              }}
-            />
-            <label className="label">Or paste JSON</label>
-            <textarea
-              className="input h-48 font-mono text-[12px]"
-              value={json}
-              onChange={(e) => {
-                setJson(e.target.value);
-                setCredTest(null);
-              }}
-              placeholder='{ "type": "service_account", "project_id": "...", "private_key": "-----BEGIN PRIVATE KEY-----..." }'
-              required
-            />
+          <div className="space-y-3">
+            <div>
+              <label className="label">Private key JSON file</label>
+              <input
+                ref={credFileRef}
+                type="file"
+                accept="application/json,.json"
+                className="block w-full text-[12px] text-ink-mute file:mr-3 file:rounded file:border file:border-line file:bg-surface-raised file:px-3 file:py-1.5 file:text-[12px] file:font-medium file:text-ink"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) {
+                    setCredFileName(null);
+                    return;
+                  }
+                  const text = await file.text();
+                  setCredFileName(file.name);
+                  setJson(text);
+                  setCredTest(null);
+                  setCredMsg(null);
+                }}
+              />
+              {credFileName ? (
+                <p className="mt-1.5 text-[12px] text-ink">
+                  Chosen file: <span className="font-mono font-medium">{credFileName}</span>
+                </p>
+              ) : (
+                <p className="mt-1.5 text-[11px] text-ink-faint">No file chosen yet</p>
+              )}
+            </div>
+
+            <div>
+              <label className="label">Or paste JSON</label>
+              <textarea
+                className="input h-48 font-mono text-[12px]"
+                value={json}
+                onChange={(e) => {
+                  setJson(e.target.value);
+                  setCredFileName(null);
+                  setCredTest(null);
+                }}
+                placeholder='{ "type": "service_account", "project_id": "...", "private_key": "-----BEGIN PRIVATE KEY-----..." }'
+              />
+            </div>
+
+            {draftCredSummary && "error" in draftCredSummary ? (
+              <p className="text-[12px] text-amber-800">{draftCredSummary.error}</p>
+            ) : draftCredSummary ? (
+              <div className="border border-line bg-surface-raised p-3 text-[12px]">
+                <p className="mb-2 font-medium text-ink">Ready to save (from file / paste)</p>
+                <dl className="space-y-1.5">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-faint">project_id</dt>
+                    <dd className="font-mono text-ink">{draftCredSummary.projectId ?? "—"}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-faint">client_email</dt>
+                    <dd className="truncate font-mono text-ink">{draftCredSummary.clientEmail ?? "—"}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-faint">private_key_id</dt>
+                    <dd className="font-mono text-ink">{draftCredSummary.privateKeyId ?? "—"}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-faint">private_key</dt>
+                    <dd className="font-mono text-ink">
+                      {draftCredSummary.hasPrivateKey ? "•••••••• (hidden — will be encrypted on save)" : "missing"}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            ) : null}
           </div>
 
           {credTest ? (
@@ -566,6 +887,8 @@ export default function ProjectDetailPage() {
               {credMsg.text}
             </div>
           ) : null}
+
+          {renderConnectionStatus()}
 
           <div className="flex flex-wrap gap-2">
             <button

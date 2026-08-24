@@ -17,6 +17,24 @@ export const CreateProjectInput = z.object({
   androidChannelId: z.string().max(200).optional(),
   /** Plaintext registration secret for mobile apps. Stored as a SHA-256 hash only. */
   registrationSecret: z.string().min(16).max(256).optional(),
+  /**
+   * Project icon: https URL, site-relative path (/branding/…), or data:image… upload.
+   * Null clears. Max ~700KB when using a data URL.
+   */
+  logoUrl: z
+    .string()
+    .max(1_000_000)
+    .nullable()
+    .optional()
+    .refine(
+      (v) =>
+        v == null ||
+        v.startsWith("https://") ||
+        v.startsWith("http://localhost") ||
+        v.startsWith("/") ||
+        v.startsWith("data:image/"),
+      { message: "logoUrl must be an image URL, /path, or data:image…" },
+    ),
   /** Project backend base URL that exposes /api/internal/notif-portal/tokens */
   tokenSourceApiBaseUrl: z.string().url().max(500).nullable().optional(),
   /** Shared secret sent as X-Notif-Portal-Key. Encrypted at rest. */
@@ -33,6 +51,20 @@ export const UpdateProjectInput = z.object({
   androidChannelId: z.string().max(200).nullable().optional(),
   status: ProjectStatus.optional(),
   registrationSecret: z.string().min(16).max(256).nullable().optional(),
+  logoUrl: z
+    .string()
+    .max(1_000_000)
+    .nullable()
+    .optional()
+    .refine(
+      (v) =>
+        v == null ||
+        v.startsWith("https://") ||
+        v.startsWith("http://localhost") ||
+        v.startsWith("/") ||
+        v.startsWith("data:image/"),
+      { message: "logoUrl must be an image URL, /path, or data:image…" },
+    ),
   tokenSourceApiBaseUrl: z.string().url().max(500).nullable().optional(),
   tokenSourceApiKey: z.string().min(16).max(256).nullable().optional(),
   tokenSourceEnabled: z.boolean().optional(),
@@ -48,6 +80,7 @@ export const ProjectPublic = z.object({
   name: z.string(),
   slug: z.string(),
   projectKey: z.string(),
+  logoUrl: z.string().nullable(),
   fcmProjectId: z.string(),
   fcmAppId: z.string().nullable(),
   fcmClientEmail: z.string(),

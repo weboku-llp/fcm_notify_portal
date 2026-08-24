@@ -4,6 +4,7 @@ import {
   type TestCredentialsResult,
   type TestSendInput,
   SegmentRules,
+  normalizeNotificationImageUrl,
 } from "@notif/contracts";
 import { prisma, type Campaign, type CampaignStatus, type Prisma, type Project } from "@notif/db";
 import { writeAuditLog } from "./audit.js";
@@ -18,6 +19,14 @@ import { renderTemplateStrict, TemplateVariableError } from "./templates.js";
 import { createLogger } from "@notif/logger";
 
 const log = createLogger("campaigns");
+
+function assertNotificationImageUrl(value: string | null | undefined): string | null {
+  const result = normalizeNotificationImageUrl(value);
+  if (!result.ok) {
+    throw new DomainError(result.message, "INVALID_IMAGE_URL", 400);
+  }
+  return result.imageUrl;
+}
 
 function asStringRecord(json: Prisma.JsonValue | null | undefined): Record<string, string> {
   if (!json || typeof json !== "object" || Array.isArray(json)) return {};
@@ -125,7 +134,7 @@ async function resolveContent(
       return {
         title: rendered.title,
         body: rendered.body,
-        imageUrl: rendered.imageUrl ?? null,
+        imageUrl: assertNotificationImageUrl(rendered.imageUrl),
         deepLink: rendered.deepLink ?? null,
         dataJson: rendered.dataJson ?? {},
         templateId: tpl.id,
@@ -141,7 +150,7 @@ async function resolveContent(
   return {
     title: input.title!,
     body: input.body!,
-    imageUrl: input.imageUrl ?? null,
+    imageUrl: assertNotificationImageUrl(input.imageUrl),
     deepLink: input.deepLink ?? null,
     dataJson: input.dataJson,
     templateId: null,
@@ -150,6 +159,7 @@ async function resolveContent(
 
 async function estimateForCampaign(project: Project, input: CreateCampaignInput): Promise<number | null> {
   if (input.mode === "BROADCAST_TOPIC") {
+    // Proxy: active portal-cache devices (Firebase does not return topic size).
     return prisma.deviceToken.count({ where: { projectId: project.id, isActive: true } });
   }
   if (input.mode === "ALL_REGISTERED") {
@@ -248,6 +258,94 @@ export async function getCampaignPublic(id: string): Promise<CampaignPublic> {
   return toPublicCampaign(c);
 }
 
+export async function listCampaignDeliveries(
+  campaignId: string,
+  opts: { status?: "SENT" | "FAILED" | "STALE"; q?: string } = {},
+): Promise<{
+  campaign: CampaignPublic;
+  deliveries: {
+    id: string;
+    campaignId: string;
+    status: "SENT" | "FAILED" | "STALE";
+    error: string | null;
+    errorCode: string | null;
+    messageId: string | null;
+    createdAt: string;
+    tokenId: string | null;
+    tokenPreview: string | null;
+    platform: "ANDROID" | "IOS" | "WEB" | null;
+    userId: string | null;
+    locale: string | null;
+  }[];
+  counts: { sent: number; failed: number; stale: number; total: number };
+}> {
+  const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
+  if (!campaign) throw new DomainError(`Campaign ${campaignId} not found`, "NOT_FOUND", 404);
+
+  const rows = await prisma.campaignDelivery.findMany({
+    where: {
+      campaignId,
+      ...(opts.status ? { status: opts.status } : {}),
+    },
+    include: {
+      token: { select: { token: true, platform: true, userId: true, locale: true } },
+    },
+    orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+    take: 2000,
+  });
+
+  const q = opts.q?.trim().toLowerCase();
+  const filtered = q
+    ? rows.filter((r) => {
+        const hay = [
+          r.error ?? "",
+          r.errorCode ?? "",
+          r.messageId ?? "",
+          r.token?.token ?? "",
+          r.token?.userId ?? "",
+          r.token?.platform ?? "",
+          r.status,
+        ]
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      })
+    : rows;
+
+  const allForCounts = await prisma.campaignDelivery.groupBy({
+    by: ["status"],
+    where: { campaignId },
+    _count: { _all: true },
+  });
+  let sent = 0;
+  let failed = 0;
+  let stale = 0;
+  for (const g of allForCounts) {
+    if (g.status === "SENT") sent = g._count._all;
+    else if (g.status === "FAILED") failed = g._count._all;
+    else if (g.status === "STALE") stale = g._count._all;
+  }
+
+  return {
+    campaign: toPublicCampaign(campaign),
+    deliveries: filtered.map((r) => ({
+      id: r.id,
+      campaignId: r.campaignId,
+      status: r.status,
+      error: r.error,
+      errorCode: r.errorCode,
+      messageId: r.messageId,
+      createdAt: r.createdAt.toISOString(),
+      tokenId: r.tokenId,
+      tokenPreview: r.token?.token ? `${r.token.token.slice(0, 20)}…` : null,
+      platform: r.token?.platform ?? null,
+      userId: r.token?.userId ?? null,
+      locale: r.token?.locale ?? null,
+    })),
+    counts: { sent, failed, stale, total: sent + failed + stale },
+  };
+}
+
 export async function cancelCampaign(id: string): Promise<CampaignPublic> {
   const c = await prisma.campaign.findUnique({ where: { id } });
   if (!c) throw new DomainError(`Campaign ${id} not found`, "NOT_FOUND", 404);
@@ -316,12 +414,34 @@ export async function runCampaign(campaignId: string): Promise<CampaignPublic> {
     return toPublicCampaign(updated);
   }
 
+  const imageCheck = normalizeNotificationImageUrl(campaign.imageUrl);
+  if (!imageCheck.ok) {
+    const updated = await prisma.campaign.update({
+      where: { id: campaignId },
+      data: {
+        status: "FAILED",
+        errorMessage: imageCheck.message,
+        completedAt: new Date(),
+      },
+    });
+    await writeAuditLog({
+      projectId: project.id,
+      action: "CAMPAIGN_FAILED",
+      summary: `Campaign blocked: ${imageCheck.message}`,
+      metadata: { campaignId, code: "INVALID_IMAGE_URL" },
+    });
+    return toPublicCampaign(updated);
+  }
+
   const sentAt = new Date();
   await prisma.campaign.update({ where: { id: campaignId }, data: { status: "SENDING", sentAt } });
 
   const sender = getFcmSender();
   const ctx = projectContext(project);
-  const message = messageFromCampaign(campaign, project);
+  const message = messageFromCampaign(
+    { ...campaign, imageUrl: imageCheck.imageUrl },
+    project,
+  );
 
   try {
     if (campaign.mode === "BROADCAST_TOPIC") {
@@ -471,12 +591,13 @@ async function recordDeliveries(
 /** Send a single test notification to one token, bypassing campaign persistence. */
 export async function testSend(projectId: string, input: TestSendInput): Promise<TestCredentialsResult> {
   const project = await getProjectOrThrow(projectId);
+  const imageUrl = assertNotificationImageUrl(input.imageUrl);
   const sender = getFcmSender();
   const ctx = projectContext(project);
   const res = await sender.sendToToken(ctx, input.token, {
     title: input.title,
     body: input.body,
-    imageUrl: input.imageUrl,
+    imageUrl,
     deepLink: input.deepLink,
     data: input.dataJson,
     androidChannelId: project.androidChannelId,
