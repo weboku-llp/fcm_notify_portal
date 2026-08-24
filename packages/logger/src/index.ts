@@ -19,6 +19,12 @@ const redactPaths = [
   "authorization",
   "*.authorization",
   "req.headers.authorization",
+  "req.headers['x-app-registration-key']",
+  "req.headers['x-notif-portal-key']",
+  "registrationSecret",
+  "*.registrationSecret",
+  "tokenSourceApiKey",
+  "*.tokenSourceApiKey",
 ];
 
 const options: LoggerOptions = {

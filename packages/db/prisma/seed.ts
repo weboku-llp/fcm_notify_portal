@@ -81,6 +81,15 @@ const demoProjects: DemoProject[] = [
     androidChannelId: "weather_alerts",
     registrationSecret: "nimbus-dev-registration-secret",
   },
+  {
+    name: "Influventure",
+    slug: "influventure",
+    fcmProjectId: "influventure-fcm",
+    fcmAppId: "1:333333333333:android:influventuredemo",
+    defaultBroadcastTopic: "influventure_all",
+    androidChannelId: "influventure_alerts",
+    registrationSecret: "influventure-dev-registration-secret",
+  },
 ];
 
 async function main(): Promise<void> {
@@ -176,25 +185,64 @@ async function main(): Promise<void> {
     await prisma.template.create({
       data: {
         projectId: project.id,
-        name: p.slug === "cricrumble" ? "Match Starting" : "Welcome",
+        name:
+          p.slug === "cricrumble"
+            ? "Match Starting"
+            : p.slug === "influventure"
+              ? "Campaign Update"
+              : "Welcome",
         title:
-          p.slug === "cricrumble" ? "{{teamA}} vs {{teamB}}" : "Welcome, {{firstName}}!",
+          p.slug === "cricrumble"
+            ? "{{teamA}} vs {{teamB}}"
+            : p.slug === "influventure"
+              ? "{{headline}}"
+              : "Welcome, {{firstName}}!",
         body:
           p.slug === "cricrumble"
             ? "Live action starts at {{matchTime}}. Open CricRumble now."
-            : "Thanks for joining {{appName}}. Enjoy the ride.",
+            : p.slug === "influventure"
+              ? "{{message}}"
+              : "Thanks for joining {{appName}}. Enjoy the ride.",
         imageUrl: p.slug === "cricrumble" ? "{{imageUrl}}" : null,
-        deepLink: p.slug === "cricrumble" ? "/matches/{{matchId}}" : null,
+        deepLink:
+          p.slug === "cricrumble"
+            ? "/matches/{{matchId}}"
+            : p.slug === "influventure"
+              ? "/campaigns/{{campaignId}}"
+              : null,
         dataJson:
           p.slug === "cricrumble"
             ? ({ type: "MATCH_START", matchId: "{{matchId}}", deepLink: "/matches/{{matchId}}" } as Prisma.InputJsonValue)
-            : ({ screen: "home" } as Prisma.InputJsonValue),
+            : p.slug === "influventure"
+              ? ({ type: "CAMPAIGN_UPDATE", campaignId: "{{campaignId}}", deepLink: "/campaigns/{{campaignId}}" } as Prisma.InputJsonValue)
+              : ({ screen: "home" } as Prisma.InputJsonValue),
         variables:
           p.slug === "cricrumble"
             ? ["teamA", "teamB", "matchTime", "imageUrl", "matchId"]
-            : ["firstName", "appName"],
+            : p.slug === "influventure"
+              ? ["headline", "message", "campaignId"]
+              : ["firstName", "appName"],
       },
     });
+
+    if (p.slug === "cricrumble") {
+      await prisma.template.create({
+        data: {
+          projectId: project.id,
+          name: "Daily Update",
+          title: "Daily Update · {{dateLabel}}",
+          body: "{{headline}} — {{summary}}",
+          imageUrl: "{{imageUrl}}",
+          deepLink: "/updates/{{updateId}}",
+          dataJson: {
+            type: "DAILY_UPDATE",
+            updateId: "{{updateId}}",
+            deepLink: "/updates/{{updateId}}",
+          } as Prisma.InputJsonValue,
+          variables: ["dateLabel", "headline", "summary", "imageUrl", "updateId"],
+        },
+      });
+    }
   }
 
   await prisma.template.create({

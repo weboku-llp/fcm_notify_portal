@@ -13,6 +13,7 @@ import {
   testServiceAccount,
   testTokenSource,
   updateProject,
+  verifyProjectCredentials,
 } from "@notif/domain";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -51,6 +52,12 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
   app.post("/projects/test-credentials", async (req) => {
     const body = z.object({ fcmServiceAccountJson: ServiceAccountInput }).parse(req.body);
     return await testServiceAccount(body.fcmServiceAccountJson);
+  });
+
+  // Re-verify the credentials already saved for this project — no re-upload needed.
+  app.post("/projects/:id/verify-credentials", async (req) => {
+    const { id } = idParams.parse(req.params);
+    return await verifyProjectCredentials(id);
   });
 
   /** Probe stored project API (does not flip enabled). */

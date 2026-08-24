@@ -3,6 +3,8 @@
 import type { TemplatePublic } from "@notif/contracts";
 import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { NotificationPreview } from "@/components/NotificationPreview";
+import { useProjects } from "@/components/ProjectContext";
 import { api, ApiError } from "@/lib/api";
 
 function render(text: string, vars: Record<string, string>): string {
@@ -17,6 +19,23 @@ function extractVars(...parts: string[]): string[] {
   return [...set];
 }
 
+/** Realistic sample values so the phone preview reads like a real push. */
+const SAMPLE_VALUES: Record<string, string> = {
+  dateLabel: "24 Aug",
+  headline: "Padikkal ton puts India on top in Colombo",
+  summary: "India 300/5 after Day 1; Australia level series vs Bangladesh",
+  imageUrl: "https://images.unsplash.com/photo-1531415079815-fe2729c43362?w=800&q=80",
+  updateId: "upd-20260824",
+  teamA: "India",
+  teamB: "Australia",
+  matchTime: "7:30 PM",
+  matchId: "m42",
+  firstName: "Alex",
+  appName: "CricRumble",
+  message: "Your campaign is live — open the app for details.",
+  campaignId: "cmp-9",
+};
+
 function emptyForm() {
   return {
     name: "",
@@ -29,6 +48,7 @@ function emptyForm() {
 }
 
 export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
+  const { selected } = useProjects();
   const [templates, setTemplates] = useState<TemplatePublic[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm());
@@ -49,7 +69,14 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
     () => extractVars(form.title, form.body, form.imageUrl, form.deepLink, form.dataJson),
     [form],
   );
-  const sampleVars = useMemo(() => Object.fromEntries(vars.map((v) => [v, `<${v}>`])), [vars]);
+  const sampleVars = useMemo(
+    () => Object.fromEntries(vars.map((v) => [v, SAMPLE_VALUES[v] ?? `<${v}>`])),
+    [vars],
+  );
+
+  const previewTitle = render(form.title || "Notification title", sampleVars);
+  const previewBody = render(form.body || "Notification body will appear here.", sampleVars);
+  const previewImage = render(form.imageUrl, sampleVars);
 
   function startCreate() {
     setEditingId(null);
@@ -67,6 +94,28 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
       imageUrl: t.imageUrl ?? "",
       deepLink: t.deepLink ?? "",
       dataJson: JSON.stringify(t.dataJson ?? {}, null, 2),
+    });
+    setShowForm(true);
+    setError(null);
+  }
+
+  function startDailyUpdatePreset() {
+    setEditingId(null);
+    setForm({
+      name: "Daily Update",
+      title: "Daily Update · {{dateLabel}}",
+      body: "{{headline}} — {{summary}}",
+      imageUrl: "{{imageUrl}}",
+      deepLink: "/updates/{{updateId}}",
+      dataJson: JSON.stringify(
+        {
+          type: "DAILY_UPDATE",
+          updateId: "{{updateId}}",
+          deepLink: "/updates/{{updateId}}",
+        },
+        null,
+        2,
+      ),
     });
     setShowForm(true);
     setError(null);
@@ -114,6 +163,9 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
     }
   }
 
+  const isCric = selected?.slug === "cricrumble";
+  const hasDaily = templates.some((t) => t.name.toLowerCase() === "daily update");
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -124,10 +176,17 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
           </p>
         </div>
         {!showForm ? (
-          <button type="button" className="btn-primary" onClick={startCreate}>
-            <Plus className="h-3.5 w-3.5" />
-            New template
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {isCric && !hasDaily ? (
+              <button type="button" className="btn-secondary" onClick={startDailyUpdatePreset}>
+                Daily Update
+              </button>
+            ) : null}
+            <button type="button" className="btn-primary" onClick={startCreate}>
+              <Plus className="h-3.5 w-3.5" />
+              New template
+            </button>
+          </div>
         ) : null}
       </div>
 
@@ -151,86 +210,103 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
             </button>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="md:col-span-2">
-              <label className="label">Name</label>
-              <input
-                className="input"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                required
-                placeholder="Match Starting"
-              />
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="space-y-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <label className="label">Name</label>
+                  <input
+                    className="input"
+                    value={form.name}
+                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    required
+                    placeholder="Daily Update"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="label">Title</label>
+                  <input
+                    className="input"
+                    value={form.title}
+                    onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                    required
+                    placeholder="Daily Update · {{dateLabel}}"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="label">Body</label>
+                  <textarea
+                    className="input h-24"
+                    value={form.body}
+                    onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))}
+                    required
+                    placeholder="{{headline}} — {{summary}}"
+                  />
+                </div>
+                <div>
+                  <label className="label">Image URL</label>
+                  <input
+                    className="input"
+                    value={form.imageUrl}
+                    onChange={(e) => setForm((f) => ({ ...f, imageUrl: e.target.value }))}
+                    placeholder="{{imageUrl}} or https://..."
+                  />
+                </div>
+                <div>
+                  <label className="label">Deep link</label>
+                  <input
+                    className="input"
+                    value={form.deepLink}
+                    onChange={(e) => setForm((f) => ({ ...f, deepLink: e.target.value }))}
+                    placeholder="/updates/{{updateId}}"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="label">Custom data (JSON string map)</label>
+                  <textarea
+                    className="input h-28 font-mono text-[12px]"
+                    value={form.dataJson}
+                    onChange={(e) => setForm((f) => ({ ...f, dataJson: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              {vars.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {vars.map((v) => (
+                    <span key={v} className="badge">
+                      {v}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+
+              {error ? (
+                <div className="border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-800">{error}</div>
+              ) : null}
+
+              <button className="btn-primary" disabled={busy}>
+                {busy ? "Saving…" : editingId ? "Update template" : "Save template"}
+              </button>
             </div>
-            <div className="md:col-span-2">
-              <label className="label">Title</label>
-              <input
-                className="input"
-                value={form.title}
-                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                required
-                placeholder="{{teamA}} vs {{teamB}}"
+
+            <aside className="lg:sticky lg:top-4 lg:self-start">
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-wide text-ink-faint">Live preview</p>
+              <NotificationPreview
+                title={previewTitle}
+                body={previewBody}
+                imageUrl={previewImage}
+                appName={selected?.name ?? "App"}
+                appSlug={selected?.slug}
+                logoUrl={selected?.logoUrl}
               />
-            </div>
-            <div className="md:col-span-2">
-              <label className="label">Body</label>
-              <textarea
-                className="input h-24"
-                value={form.body}
-                onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))}
-                required
-                placeholder="Live action starts at {{matchTime}}."
-              />
-            </div>
-            <div>
-              <label className="label">Image URL</label>
-              <input
-                className="input"
-                value={form.imageUrl}
-                onChange={(e) => setForm((f) => ({ ...f, imageUrl: e.target.value }))}
-                placeholder="{{imageUrl}} or https://..."
-              />
-            </div>
-            <div>
-              <label className="label">Deep link</label>
-              <input
-                className="input"
-                value={form.deepLink}
-                onChange={(e) => setForm((f) => ({ ...f, deepLink: e.target.value }))}
-                placeholder="/matches/{{matchId}}"
-              />
-            </div>
-            <div className="md:col-span-2">
-              <label className="label">Custom data (JSON string map)</label>
-              <textarea
-                className="input h-28 font-mono text-[12px]"
-                value={form.dataJson}
-                onChange={(e) => setForm((f) => ({ ...f, dataJson: e.target.value }))}
-              />
-            </div>
+              {form.deepLink.trim() ? (
+                <p className="mt-3 truncate font-mono text-[11px] text-ink-faint">
+                  → {render(form.deepLink, sampleVars)}
+                </p>
+              ) : null}
+            </aside>
           </div>
-
-          {vars.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {vars.map((v) => (
-                <span key={v} className="badge">
-                  {v}
-                </span>
-              ))}
-            </div>
-          ) : null}
-
-          <div className="border border-line bg-surface-raised p-3">
-            <p className="mb-1 font-mono text-[10px] uppercase tracking-wide text-ink-faint">Preview</p>
-            <p className="text-[13px] font-semibold text-ink">{render(form.title || "Title", sampleVars)}</p>
-            <p className="text-[13px] text-ink-mute">{render(form.body || "Body", sampleVars)}</p>
-          </div>
-
-          {error ? <div className="border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-800">{error}</div> : null}
-
-          <button className="btn-primary" disabled={busy}>
-            {busy ? "Saving…" : editingId ? "Update template" : "Save template"}
-          </button>
         </form>
       ) : null}
 

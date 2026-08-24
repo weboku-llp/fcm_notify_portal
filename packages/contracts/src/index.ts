@@ -7,6 +7,7 @@ export * from "./template.js";
 export * from "./campaign.js";
 export * from "./queue.js";
 export * from "./token-source.js";
+export * from "./notification-image.js";
 
 /** Standard API error envelope. */
 export interface ApiError {

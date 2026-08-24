@@ -46,6 +46,17 @@ function toPlatform(p: ExternalDeviceToken["platform"]): Platform {
   }
 }
 
+/**
+ * Skip seed / probe strings that are not real FCM registration tokens.
+ * Real Android/iOS tokens are long and typically look like `…:APA91b…`.
+ */
+function isLikelyFcmToken(token: string): boolean {
+  const t = token.trim();
+  if (t.length < 80) return false;
+  if (!t.includes(":")) return false;
+  return true;
+}
+
 export function projectHasTokenSource(project: Project): boolean {
   return Boolean(
     project.tokenSourceEnabled &&
@@ -263,6 +274,13 @@ export async function syncProjectTokens(
       const page = await fetchTokensPage(project, cursor, options.userIds);
       pages += 1;
       for (const item of page.tokens) {
+        if (!isLikelyFcmToken(item.token)) {
+          log.warn(
+            { projectId, tokenPreview: item.token.slice(0, 32) },
+            "skipping non-FCM token from project API sync",
+          );
+          continue;
+        }
         // Touch lastSeenAt to syncStartedAt so we can deactivate rows not seen in this full sync.
         await prisma.deviceToken.upsert({
           where: { projectKey_token: { projectKey: project.slug, token: item.token } },

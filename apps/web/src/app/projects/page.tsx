@@ -2,9 +2,9 @@
 
 import type { ProjectPublic } from "@notif/contracts";
 import { ArrowRight, Check, Link2, Loader2, Plus, Radio, Settings2 } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { useProjects } from "@/components/ProjectContext";
+import { ProjectIcon, ProjectIconPlaceholder } from "@/components/ProjectIcon";
 import { projectLogo } from "@/lib/brand";
 import { fmtDate } from "@/lib/ui";
 
@@ -62,7 +62,7 @@ export default function ProjectsPage() {
       <div className="grid gap-3 xl:grid-cols-2">
         {projects.map((p) => {
           const isSelected = selected?.id === p.id;
-          const logo = projectLogo(p.slug);
+          const logo = projectLogo(p);
           const configured = isProjectFullyConfigured(p);
           const settingsHref = `/projects/${p.id}?tab=settings`;
 
@@ -75,13 +75,9 @@ export default function ProjectsPage() {
             >
               <div className="flex items-start gap-4 border-b border-line p-4">
                 {logo ? (
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center bg-black p-1">
-                    <Image src={logo.src} alt={logo.alt} width={48} height={48} className="h-12 w-12 object-contain" />
-                  </div>
+                  <ProjectIcon src={logo.src} alt={logo.alt} boxClassName="h-14 w-14" darkBox />
                 ) : (
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center border border-line bg-surface-raised font-mono text-sm font-semibold uppercase text-ink-mute">
-                    {p.name.slice(0, 2)}
-                  </div>
+                  <ProjectIconPlaceholder name={p.name} />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
