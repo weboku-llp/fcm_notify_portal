@@ -6,7 +6,25 @@ import { env } from "./env.js";
 
 const log = createLogger("api:queue");
 
-export const connection = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+function createRedis(): Redis {
+  const url = env.REDIS_URL;
+  const redis = new Redis(url, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+    // Railway / managed Redis often drops idle connections; reconnect quietly.
+    retryStrategy: (times) => Math.min(times * 200, 5000),
+    reconnectOnError: (err) => {
+      const msg = err.message || "";
+      return msg.includes("ECONNRESET") || msg.includes("READONLY") || msg.includes("ETIMEDOUT");
+    },
+  });
+  redis.on("error", (err) => {
+    log.warn({ err: err.message }, "redis connection error");
+  });
+  return redis;
+}
+
+export const connection = createRedis();
 
 export const sendQueue = new Queue<SendCampaignJob>(QUEUE_NAMES.send, { connection });
 

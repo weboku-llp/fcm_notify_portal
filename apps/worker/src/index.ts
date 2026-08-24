@@ -14,7 +14,18 @@ import { env } from "./env.js";
 
 const log = createLogger("worker");
 
-const connection = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+const connection = new Redis(env.REDIS_URL, {
+  maxRetriesPerRequest: null,
+  enableReadyCheck: true,
+  retryStrategy: (times) => Math.min(times * 200, 5000),
+  reconnectOnError: (err) => {
+    const msg = err.message || "";
+    return msg.includes("ECONNRESET") || msg.includes("READONLY") || msg.includes("ETIMEDOUT");
+  },
+});
+connection.on("error", (err) => {
+  log.warn({ err: err.message }, "redis connection error");
+});
 
 const sendQueue = new Queue<SendCampaignJob>(QUEUE_NAMES.send, { connection });
 const schedulerQueue = new Queue<SchedulerTickJob>(QUEUE_NAMES.scheduler, { connection });
