@@ -8,6 +8,7 @@ import { env } from "./env.js";
 import { registerErrorHandler } from "./lib/errors.js";
 import { closeQueue } from "./queue.js";
 import { campaignRoutes } from "./routes/campaigns.js";
+import { cricLiveRoutes } from "./routes/cric-live.js";
 import { deviceRegistrationRoutes } from "./routes/device-registrations.js";
 import { projectRoutes } from "./routes/projects.js";
 import { segmentRoutes } from "./routes/segments.js";
@@ -49,6 +50,7 @@ async function buildServer() {
   await app.register(segmentRoutes);
   await app.register(templateRoutes);
   await app.register(campaignRoutes);
+  await app.register(cricLiveRoutes);
 
   return app;
 }
