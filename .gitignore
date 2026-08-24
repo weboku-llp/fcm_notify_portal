@@ -1,4 +1,4 @@
-﻿# dependencies
+# dependencies
 node_modules/
 .pnpm-store/
 
@@ -34,3 +34,6 @@ Thumbs.db
 # secrets / credentials — never commit real service accounts
 *.serviceaccount.json
 secrets/
+# Per-service local env
+apps/*/.env
+apps/*/.env.local

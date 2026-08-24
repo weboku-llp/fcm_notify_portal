@@ -1,12 +1,18 @@
 import {
   QUEUE_NAMES,
   sendJobId,
+  type LiveScoreTickJob,
   type SchedulerTickJob,
   type SendCampaignJob,
   type TokenSyncJob,
 } from "@notif/contracts";
 import { prisma } from "@notif/db";
-import { runCampaign, syncAllEnabledProjectTokens, syncProjectTokens } from "@notif/domain";
+import {
+  runCampaign,
+  runCricLiveScoreTick,
+  syncAllEnabledProjectTokens,
+  syncProjectTokens,
+} from "@notif/domain";
 import { createLogger } from "@notif/logger";
 import { Queue, Worker, type Job } from "bullmq";
 import { Redis } from "ioredis";
@@ -30,9 +36,11 @@ connection.on("error", (err) => {
 const sendQueue = new Queue<SendCampaignJob>(QUEUE_NAMES.send, { connection });
 const schedulerQueue = new Queue<SchedulerTickJob>(QUEUE_NAMES.scheduler, { connection });
 const tokenSyncQueue = new Queue<TokenSyncJob>(QUEUE_NAMES.tokenSync, { connection });
+const liveScoreQueue = new Queue<LiveScoreTickJob>(QUEUE_NAMES.liveScore, { connection });
 
 const SCHEDULER_INTERVAL_MS = 30_000;
 const TOKEN_SYNC_INTERVAL_MS = 5 * 60_000;
+const LIVE_SCORE_INTERVAL_MS = 30_000;
 
 /**
  * Promote due SCHEDULED campaigns to QUEUED and enqueue a send job for each,
@@ -89,6 +97,18 @@ async function registerRepeatableJobs(): Promise<void> {
     },
   );
   log.info({ everyMs: TOKEN_SYNC_INTERVAL_MS }, "registered repeatable token sync");
+
+  await liveScoreQueue.add(
+    "tick",
+    {},
+    {
+      repeat: { every: LIVE_SCORE_INTERVAL_MS },
+      jobId: "cric-live-score-tick",
+      removeOnComplete: 10,
+      removeOnFail: 10,
+    },
+  );
+  log.info({ everyMs: LIVE_SCORE_INTERVAL_MS }, "registered repeatable cric live score");
 }
 
 function startWorkers(): Worker[] {
@@ -130,12 +150,25 @@ function startWorkers(): Worker[] {
     { connection, concurrency: 1 },
   );
 
-  for (const w of [sendWorker, schedulerWorker, tokenSyncWorker]) {
+  const liveScoreWorker = new Worker<LiveScoreTickJob>(
+    QUEUE_NAMES.liveScore,
+    async () => {
+      // Sends inline inside runCricLiveScoreTick (no extra send-queue hop).
+      const result = await runCricLiveScoreTick();
+      if (result.checked > 0 || result.sent > 0 || result.errors > 0) {
+        log.info(result, "cric live score tick finished");
+      }
+      return result;
+    },
+    { connection, concurrency: 1 },
+  );
+
+  for (const w of [sendWorker, schedulerWorker, tokenSyncWorker, liveScoreWorker]) {
     w.on("failed", (job, err) => log.error({ jobId: job?.id, err: err.message }, "job failed"));
     w.on("error", (err) => log.error({ err: err.message }, "worker error"));
   }
 
-  return [sendWorker, schedulerWorker, tokenSyncWorker];
+  return [sendWorker, schedulerWorker, tokenSyncWorker, liveScoreWorker];
 }
 
 async function main(): Promise<void> {
@@ -149,6 +182,7 @@ async function main(): Promise<void> {
     await sendQueue.close();
     await schedulerQueue.close();
     await tokenSyncQueue.close();
+    await liveScoreQueue.close();
     await connection.quit();
     await prisma.$disconnect().catch(() => undefined);
     process.exit(0);

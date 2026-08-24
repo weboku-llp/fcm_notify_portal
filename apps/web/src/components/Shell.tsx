@@ -2,6 +2,7 @@
 
 import type { LucideIcon } from "lucide-react";
 import {
+  Activity,
   ChevronDown,
   FolderKanban,
   History,
@@ -19,10 +20,11 @@ import { ProjectIcon } from "@/components/ProjectIcon";
 import { projectLogo } from "@/lib/brand";
 import { useProjects } from "./ProjectContext";
 
-const NAV: { href: string; label: string; icon: LucideIcon; group: string }[] = [
+const NAV: { href: string; label: string; icon: LucideIcon; group: string; cricOnly?: boolean }[] = [
   { href: "/projects", label: "Projects", icon: FolderKanban, group: "Workspace" },
   { href: "/campaigns/new", label: "Compose", icon: Megaphone, group: "Messaging" },
   { href: "/campaigns", label: "History", icon: History, group: "Messaging" },
+  { href: "/live-scores", label: "Live scores", icon: Activity, group: "Messaging", cricOnly: true },
   { href: "/segments", label: "Segments", icon: Target, group: "Audience" },
   { href: "/tokens", label: "Devices", icon: Smartphone, group: "Audience" },
 ];
@@ -31,6 +33,7 @@ function isActive(pathname: string, href: string): boolean {
   if (href === "/campaigns") return pathname === "/campaigns";
   if (href === "/campaigns/new") return pathname.startsWith("/campaigns/new");
   if (href === "/projects") return pathname === "/projects" || pathname.startsWith("/projects/");
+  if (href === "/live-scores") return pathname.startsWith("/live-scores");
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -56,7 +59,7 @@ function NavLinks({
             {group}
           </p>
           <div className="space-y-0.5">
-            {NAV.filter((item) => item.group === group).map((item) => {
+            {NAV.filter((item) => item.group === group && (!item.cricOnly || cric)).map((item) => {
               const Icon = item.icon;
               const active = isActive(pathname, item.href);
               return (

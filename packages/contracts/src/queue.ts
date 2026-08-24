@@ -5,6 +5,7 @@ export const QUEUE_NAMES = {
   send: "campaign-send",
   scheduler: "campaign-scheduler",
   tokenSync: "project-token-sync",
+  liveScore: "cric-live-score",
 } as const;
 
 /** Periodic / manual sync of FCM tokens from a project API into the portal DB. */

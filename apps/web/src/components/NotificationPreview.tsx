@@ -108,7 +108,7 @@ export function NotificationPreview({
                     <p className="mt-0.5 truncate text-[13px] font-semibold leading-snug text-ink">
                       {displayTitle}
                     </p>
-                    {!expanded || !showImage ? (
+                    {(!expanded || !showImage) && displayBody !== displayTitle ? (
                       <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-ink-mute">{displayBody}</p>
                     ) : null}
                   </div>
@@ -126,7 +126,7 @@ export function NotificationPreview({
                   </div>
                 ) : null}
 
-                {expanded && showImage ? (
+                {expanded && showImage && displayBody !== displayTitle ? (
                   <p className="px-3.5 pb-3 text-[12px] leading-snug text-ink-mute">{displayBody}</p>
                 ) : null}
 
