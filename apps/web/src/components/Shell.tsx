@@ -12,10 +12,10 @@ import {
   Target,
   X,
 } from "lucide-react";
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { ProjectIcon } from "@/components/ProjectIcon";
 import { projectLogo } from "@/lib/brand";
 import { useProjects } from "./ProjectContext";
 
@@ -89,7 +89,7 @@ function NavLinks({
 export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { projects, selected, selectProject } = useProjects();
-  const logo = projectLogo(selected?.slug);
+  const logo = projectLogo(selected);
   const cric = selected?.slug === "cricrumble";
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -98,13 +98,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <div className={`border-b px-4 py-4 ${cric ? "border-white/10" : "border-line"}`}>
         <Link href="/projects" className="block" onClick={() => setMobileOpen(false)}>
           {logo ? (
-            <Image
+            <ProjectIcon
               src={logo.src}
               alt={logo.alt}
-              width={160}
-              height={48}
-              className="mx-auto h-12 w-auto object-contain"
-              priority
+              className="mx-auto h-12 w-auto max-w-[160px] object-contain"
             />
           ) : (
             <div>

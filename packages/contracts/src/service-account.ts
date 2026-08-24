@@ -4,6 +4,26 @@ import { z } from "zod";
  * Shape of a Firebase service-account JSON. We only strictly require the fields
  * `firebase-admin` needs to build credentials; extra keys are allowed.
  */
+
+/** Fix common paste/export issues that make OpenSSL reject the PEM. */
+export function normalizePrivateKey(key: string): string {
+  let k = key.trim().replace(/^\uFEFF/, "");
+  // Double-escaped newlines (\\n) → real newlines. Safe if already real \n.
+  if (k.includes("\\n")) {
+    k = k.replace(/\\n/g, "\n");
+  }
+  k = k.replace(/\\r\\n/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // Some editors wrap the PEM with extra quotes
+  if (
+    (k.startsWith('"') && k.endsWith('"')) ||
+    (k.startsWith("'") && k.endsWith("'"))
+  ) {
+    k = k.slice(1, -1);
+    if (k.includes("\\n")) k = k.replace(/\\n/g, "\n");
+  }
+  return k.trim();
+}
+
 export const ServiceAccountSchema = z
   .object({
     type: z.literal("service_account"),
@@ -20,7 +40,11 @@ export const ServiceAccountSchema = z
     client_x509_cert_url: z.string().url().optional(),
     universe_domain: z.string().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .transform((sa) => ({
+    ...sa,
+    private_key: normalizePrivateKey(sa.private_key),
+  }));
 
 export type ServiceAccount = z.infer<typeof ServiceAccountSchema>;
 

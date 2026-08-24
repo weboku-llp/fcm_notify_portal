@@ -83,6 +83,9 @@ model Project {
   /// Stable project key used by mobile apps (e.g. "cricrumble").
   slug String @unique
 
+  /// Optional project icon: https URL, /public path, or data:image… (uploaded in settings).
+  logoUrl String?
+
   /// Encrypted at rest (AES-256-GCM). Never logged or returned in API responses.
   fcmServiceAccountJson String
   /// SHA-256 fingerprint of the plaintext service account, safe to display masked.

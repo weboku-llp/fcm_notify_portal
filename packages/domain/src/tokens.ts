@@ -285,13 +285,18 @@ export async function estimateAudience(
     targetUserIds?: string[];
     targetTokens?: string[];
   },
-): Promise<{ estimatedRecipients: number; coverageNote: string }> {
+): Promise<{ estimatedRecipients: number | null; coverageNote: string }> {
   const coverageNote =
     "Portal notifications reach devices that have updated and registered with the new notification system. Use Firebase Console during the migration period to reach older app versions.";
 
   if (query.mode === "BROADCAST_TOPIC") {
-    const count = await countActiveDevices(projectId);
-    return { estimatedRecipients: count, coverageNote };
+    // Best available proxy: active devices in portal cache (Firebase does not
+    // expose live topic subscriber counts).
+    return {
+      estimatedRecipients: await countActiveDevices(projectId),
+      coverageNote:
+        "EST is active devices in the portal cache. Topic send still reaches every device subscribed via subscribeToTopic (may be more or fewer than cache).",
+    };
   }
   if (query.mode === "ALL_REGISTERED") {
     return { estimatedRecipients: await countActiveDevices(projectId), coverageNote };
