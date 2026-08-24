@@ -16,6 +16,7 @@
     "@notif/db": "workspace:*",
     "@notif/domain": "workspace:*",
     "@notif/logger": "workspace:*",
+    "@prisma/client": "6.19.3",
     "bullmq": "^5.34.5",
     "ioredis": "^5.4.2"
   },
