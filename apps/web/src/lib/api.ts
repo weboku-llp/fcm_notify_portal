@@ -10,7 +10,8 @@ import type {
   TokenSyncResult,
 } from "@notif/contracts";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+/** API origin; trailing slashes stripped so `/projects` never becomes `//projects`. */
+const BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/+$/, "");
 
 export class ApiError extends Error {
   constructor(
@@ -25,7 +26,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    // Only set JSON content-type when there's an actual body — Fastify's
+    // Only set JSON content-type when there's an actual body â€” Fastify's
     // default JSON body parser rejects an empty body sent with this header
     // ("Body cannot be empty when content-type is set to 'application/json'"),
     // which would otherwise 400 every body-less POST/DELETE (sync, cancel, etc).
