@@ -39,6 +39,34 @@ describe("template rendering", () => {
     assert.equal(rendered.deepLink, "/matches/m42");
   });
 
+  it("renders Daily Update template", () => {
+    const rendered = renderTemplateStrict(
+      {
+        title: "Daily Update · {{dateLabel}}",
+        body: "{{headline}} — {{summary}}",
+        imageUrl: "{{imageUrl}}",
+        deepLink: "/updates/{{updateId}}",
+        dataJson: {
+          type: "DAILY_UPDATE",
+          updateId: "{{updateId}}",
+          deepLink: "/updates/{{updateId}}",
+        },
+      },
+      ["dateLabel", "headline", "summary", "imageUrl", "updateId"],
+      {
+        dateLabel: "23 Aug",
+        headline: "Kohli century seals the series",
+        summary: "India chase 278 with 6 wickets and 8 balls to spare.",
+        imageUrl: "https://cdn.example/daily.png",
+        updateId: "upd-42",
+      },
+    );
+    assert.equal(rendered.title, "Daily Update · 23 Aug");
+    assert.equal(rendered.body, "Kohli century seals the series — India chase 278 with 6 wickets and 8 balls to spare.");
+    assert.equal(rendered.deepLink, "/updates/upd-42");
+    assert.equal(rendered.dataJson?.type, "DAILY_UPDATE");
+  });
+
   it("rejects missing required variables", () => {
     assert.throws(
       () =>

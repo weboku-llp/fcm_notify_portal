@@ -79,3 +79,13 @@ Worker also syncs all enabled projects every **5 minutes**.
 
 - Route: `apps/api/src/legacy-routes/internal/notif-portal/tokens/route.ts`
 - Env: `NOTIF_PORTAL_TOKEN_EXPORT_KEY` (min 16 chars)
+
+## Influventure reference
+
+- Portal project slug / `projectKey`: `influventure`
+- Broadcast topic: `influventure_all`
+- Register (anon): `POST /api/device/fcm/token`
+- Register (auth): `POST /api/user/fcm/token`
+- Export: `GET /api/internal/notif-portal/tokens` (header `X-Notif-Portal-Key`)
+- Env on Influventure API: `NOTIF_PORTAL_TOKEN_EXPORT_KEY` (min 16 chars)
+- Optional registration gate: `FCM_DEVICE_REGISTRATION_KEY` (header `X-Fcm-Registration-Key`)

@@ -1,4 +1,5 @@
 import type {
+  CampaignDeliveryPublic,
   CampaignPublic,
   DeviceTokenPublic,
   ProjectPublic,
@@ -24,7 +25,11 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    // Only set JSON content-type when there's an actual body — Fastify's
+    // default JSON body parser rejects an empty body sent with this header
+    // ("Body cannot be empty when content-type is set to 'application/json'"),
+    // which would otherwise 400 every body-less POST/DELETE (sync, cancel, etc).
+    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) },
     cache: "no-store",
   });
   if (res.status === 204) return undefined as T;
@@ -59,6 +64,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ fcmServiceAccountJson }),
     }),
+  verifyCredentials: (projectId: string) =>
+    request<TestCredentialsResult>(`/projects/${projectId}/verify-credentials`, { method: "POST" }),
   testTokenSource: (projectId: string) =>
     request<TokenSourceTestResult>(`/projects/${projectId}/token-source/test`, { method: "POST" }),
   testAndEnableTokenSource: (
@@ -82,6 +89,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }).then((r) => r.token),
+  deleteToken: (projectId: string, token: string) =>
+    request<void>(`/projects/${projectId}/tokens/${encodeURIComponent(token)}`, { method: "DELETE" }),
   estimateAudience: (
     projectId: string,
     body: {
@@ -141,6 +150,17 @@ export const api = {
     }),
   cancelCampaign: (id: string) =>
     request<{ campaign: CampaignPublic }>(`/campaigns/${id}/cancel`, { method: "POST" }).then((r) => r.campaign),
+  listCampaignDeliveries: (campaignId: string, opts?: { status?: "SENT" | "FAILED" | "STALE"; q?: string }) => {
+    const params = new URLSearchParams();
+    if (opts?.status) params.set("status", opts.status);
+    if (opts?.q?.trim()) params.set("q", opts.q.trim());
+    const qs = params.toString();
+    return request<{
+      campaign: CampaignPublic;
+      deliveries: CampaignDeliveryPublic[];
+      counts: { sent: number; failed: number; stale: number; total: number };
+    }>(`/campaigns/${campaignId}/deliveries${qs ? `?${qs}` : ""}`);
+  },
   testSend: (projectId: string, body: unknown) =>
     request<TestCredentialsResult>(`/projects/${projectId}/campaigns/test`, {
       method: "POST",

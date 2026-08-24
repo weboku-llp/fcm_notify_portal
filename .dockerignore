@@ -1,0 +1,42 @@
+# deps & build caches
+node_modules
+.pnpm-store
+**/.turbo
+**/dist
+**/.next
+**/out
+**/*.tsbuildinfo
+
+# env & secrets
+.env
+.env.*
+!.env.example
+**/*.serviceaccount.json
+secrets/
+
+# git / IDE / local
+.git
+.gitignore
+.cursor
+.vscode
+.idea
+**/.DS_Store
+**/Thumbs.db
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# docs & non-runtime
+*.md
+!**/README.md
+notification_readme_influventure.md
+docs
+
+# local infra / Flutter SDK (not needed in Node images)
+docker-compose.yml
+packages/mobile-sdk
+
+# tests
+**/__tests__
+**/*.test.ts
+**/*.spec.ts

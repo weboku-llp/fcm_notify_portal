@@ -86,10 +86,16 @@ function parseOrThrow<T extends z.ZodTypeAny>(schema: T, label: string): z.infer
 
 /** Env needed by the API process. */
 export function loadApiEnv() {
-  return parseOrThrow(
+  const env = parseOrThrow(
     baseSchema.merge(databaseSchema).merge(redisSchema).merge(cryptoSchema).merge(apiSchema),
     "api",
   );
+  // Railway/Heroku-style PORT takes precedence when set.
+  const railwayPort = process.env.PORT ? Number(process.env.PORT) : NaN;
+  if (Number.isFinite(railwayPort) && railwayPort > 0) {
+    return { ...env, API_PORT: railwayPort };
+  }
+  return env;
 }
 
 /** Env needed by the worker process. */

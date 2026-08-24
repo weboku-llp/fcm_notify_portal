@@ -18,6 +18,7 @@ export default function TokensPage() {
   const [locale, setLocale] = useState("");
   const [topics, setTopics] = useState("");
   const [busy, setBusy] = useState(false);
+  const [deletingToken, setDeletingToken] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!selected) return;
@@ -49,6 +50,18 @@ export default function TokensPage() {
       await load();
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function removeToken(t: string) {
+    if (!selected) return;
+    if (!window.confirm("Delete this device token permanently? This cannot be undone.")) return;
+    setDeletingToken(t);
+    try {
+      await api.deleteToken(selected.id, t);
+      await load();
+    } finally {
+      setDeletingToken(null);
     }
   }
 
@@ -109,6 +122,7 @@ export default function TokensPage() {
               <th className="px-4 py-3">Locale</th>
               <th className="px-4 py-3">Topics</th>
               <th className="px-4 py-3">Last seen</th>
+              <th className="px-4 py-3" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -125,11 +139,21 @@ export default function TokensPage() {
                 <td className="px-4 py-3">{t.locale ?? "—"}</td>
                 <td className="px-4 py-3">{t.topics.join(", ") || "—"}</td>
                 <td className="px-4 py-3 text-slate-500">{fmtDate(t.lastSeenAt)}</td>
+                <td className="px-4 py-3 text-right">
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-red-600 hover:text-red-800 disabled:opacity-40"
+                    disabled={deletingToken === t.token}
+                    onClick={() => void removeToken(t.token)}
+                  >
+                    {deletingToken === t.token ? "Deleting…" : "Delete"}
+                  </button>
+                </td>
               </tr>
             ))}
             {tokens.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
                   No tokens registered yet. They appear after the app update registers devices.
                 </td>
               </tr>

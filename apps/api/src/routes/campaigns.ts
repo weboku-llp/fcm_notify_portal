@@ -1,8 +1,9 @@
-import { CreateCampaignInput, sendJobId, TestSendInput } from "@notif/contracts";
+import { CreateCampaignInput, ListCampaignDeliveriesQuery, sendJobId, TestSendInput } from "@notif/contracts";
 import {
   cancelCampaign,
   createCampaign,
   getCampaignPublic,
+  listCampaignDeliveries,
   listCampaigns,
   testSend,
 } from "@notif/domain";
@@ -24,6 +25,12 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
     return { campaign: await getCampaignPublic(id) };
   });
 
+  app.get("/campaigns/:id/deliveries", async (req) => {
+    const { id } = campaignParams.parse(req.params);
+    const query = ListCampaignDeliveriesQuery.parse(req.query);
+    return await listCampaignDeliveries(id, query);
+  });
+
   app.post("/projects/:id/campaigns", async (req, reply) => {
     const { id } = projectParams.parse(req.params);
     const input = CreateCampaignInput.parse(req.body);
@@ -35,12 +42,10 @@ export async function campaignRoutes(app: FastifyInstance): Promise<void> {
   app.post("/campaigns/:id/cancel", async (req) => {
     const { id } = campaignParams.parse(req.params);
     const campaign = await cancelCampaign(id);
-    // Best-effort removal of a not-yet-processed job.
     await sendQueue.remove(sendJobId(id)).catch(() => undefined);
     return { campaign };
   });
 
-  // Send a single notification to one test token (no persistence).
   app.post("/projects/:id/campaigns/test", async (req) => {
     const { id } = projectParams.parse(req.params);
     const input = TestSendInput.parse(req.body);

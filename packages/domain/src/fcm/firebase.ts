@@ -1,4 +1,5 @@
 import admin from "firebase-admin";
+import { normalizeNotificationImageUrl } from "@notif/contracts";
 import { createLogger } from "@notif/logger";
 import {
   type CredentialCheckResult,
@@ -51,22 +52,76 @@ export async function evictApp(projectId: string): Promise<void> {
 function buildMessage(message: PushMessage, ctx: FcmProjectContext) {
   const data: Record<string, string> = { ...(message.data ?? {}) };
   if (message.deepLink) data.deepLink = message.deepLink;
+  // Also expose image in data for clients that render custom notifications.
+  const normalized = normalizeNotificationImageUrl(message.imageUrl);
+  // Never attach a bad URL — FCM returns messaging/invalid-payload for all tokens.
+  const imageUrl = normalized.ok ? (normalized.imageUrl ?? undefined) : undefined;
+  if (message.imageUrl && !normalized.ok) {
+    log.warn({ reason: normalized.message }, "dropping invalid notification imageUrl before FCM send");
+  }
+  if (imageUrl) data.imageUrl = imageUrl;
   const channelId = message.androidChannelId ?? ctx.androidChannelId ?? undefined;
 
   return {
     notification: {
       title: message.title,
       body: message.body,
-      ...(message.imageUrl ? { imageUrl: message.imageUrl } : {}),
+      ...(imageUrl ? { imageUrl } : {}),
     },
     data,
+    // High priority + TTL matter when the app hasn't been opened for a day+
+    // (Doze / App Standby). Without this, Android may defer delivery indefinitely.
     android: {
+      priority: "high" as const,
+      ttl: 86400 * 1000, // keep up to 24h if device was offline
       notification: {
         ...(channelId ? { channelId } : {}),
-        ...(message.imageUrl ? { imageUrl: message.imageUrl } : {}),
+        ...(imageUrl ? { imageUrl } : {}),
+        defaultSound: true,
+        // Heads-up style when channel importance is HIGH on the device
+        priority: "high" as const,
       },
     },
-    webpush: message.deepLink ? { fcmOptions: { link: message.deepLink } } : undefined,
+    apns: {
+      headers: {
+        "apns-priority": "10",
+        "apns-push-type": "alert",
+        // Retain if device was offline (seconds)
+        "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400),
+      },
+      payload: {
+        aps: {
+          sound: "default",
+          // Required so iOS Notification Service Extension can attach the image.
+          "mutable-content": 1 as const,
+          "content-available": 1 as const,
+        },
+      },
+      ...(imageUrl
+        ? {
+            fcmOptions: {
+              imageUrl,
+            },
+          }
+        : {}),
+    },
+    webpush: {
+      headers: {
+        Urgency: "high",
+        TTL: "86400",
+        ...(imageUrl ? { image: imageUrl } : {}),
+      },
+      ...(imageUrl
+        ? {
+            notification: {
+              title: message.title,
+              body: message.body,
+              image: imageUrl,
+            },
+          }
+        : {}),
+      ...(message.deepLink ? { fcmOptions: { link: message.deepLink } } : {}),
+    },
   };
 }
 

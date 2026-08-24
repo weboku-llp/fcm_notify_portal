@@ -12,6 +12,7 @@ export {
   getProjectByKeyOrThrow,
   getProjectPublic,
   updateProject,
+  verifyProjectCredentials,
 } from "./projects.js";
 export * from "./tokens.js";
 export * from "./token-source.js";
@@ -23,6 +24,7 @@ export {
   createCampaign,
   listCampaigns,
   getCampaignPublic,
+  listCampaignDeliveries,
   cancelCampaign,
   runCampaign,
   testSend,
