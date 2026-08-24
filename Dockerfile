@@ -43,8 +43,8 @@ COPY apps ./apps
 COPY packages ./packages
 
 # Install ALL deps (prisma/tsup/typescript are devDependencies needed to build).
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile
+# No BuildKit cache mount: Railway Metal builder rejects unprefixed --mount id.
+RUN pnpm install --frozen-lockfile
 
 ENV NODE_ENV=production
 RUN pnpm --filter @notif/db generate \
