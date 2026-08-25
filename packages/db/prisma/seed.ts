@@ -3,6 +3,7 @@ import { ServiceAccountSchema } from "@notif/contracts";
 import { encryptServiceAccount } from "@notif/crypto";
 import { prisma, type Prisma } from "@notif/db";
 import { createHash } from "node:crypto";
+import { INFLUVENTURE_TEMPLATES } from "./influventure-templates";
 
 // Validate + load env (DATABASE_URL, PORTAL_ENCRYPTION_KEY).
 loadDbEnv();
@@ -182,48 +183,48 @@ async function main(): Promise<void> {
       },
     });
 
-    await prisma.template.create({
-      data: {
-        projectId: project.id,
-        name:
-          p.slug === "cricrumble"
-            ? "Match Starting"
-            : p.slug === "influventure"
-              ? "Campaign Update"
-              : "Welcome",
-        title:
-          p.slug === "cricrumble"
-            ? "{{teamA}} vs {{teamB}}"
-            : p.slug === "influventure"
-              ? "{{headline}}"
-              : "Welcome, {{firstName}}!",
-        body:
-          p.slug === "cricrumble"
-            ? "Live action starts at {{matchTime}}. Open CricRumble now."
-            : p.slug === "influventure"
-              ? "{{message}}"
+    if (p.slug === "influventure") {
+      for (const tpl of INFLUVENTURE_TEMPLATES) {
+        await prisma.template.create({
+          data: {
+            projectId: project.id,
+            name: tpl.name,
+            title: tpl.title,
+            body: tpl.body,
+            imageUrl: tpl.imageUrl ?? null,
+            deepLink: tpl.deepLink ?? null,
+            dataJson: tpl.dataJson as Prisma.InputJsonValue,
+            variables: tpl.variables,
+          },
+        });
+      }
+    } else {
+      await prisma.template.create({
+        data: {
+          projectId: project.id,
+          name: p.slug === "cricrumble" ? "Match Starting" : "Welcome",
+          title: p.slug === "cricrumble" ? "{{teamA}} vs {{teamB}}" : "Welcome, {{firstName}}!",
+          body:
+            p.slug === "cricrumble"
+              ? "Live action starts at {{matchTime}}. Open CricRumble now."
               : "Thanks for joining {{appName}}. Enjoy the ride.",
-        imageUrl: p.slug === "cricrumble" ? "{{imageUrl}}" : null,
-        deepLink:
-          p.slug === "cricrumble"
-            ? "/matches/{{matchId}}"
-            : p.slug === "influventure"
-              ? "/campaigns/{{campaignId}}"
-              : null,
-        dataJson:
-          p.slug === "cricrumble"
-            ? ({ type: "MATCH_START", matchId: "{{matchId}}", deepLink: "/matches/{{matchId}}" } as Prisma.InputJsonValue)
-            : p.slug === "influventure"
-              ? ({ type: "CAMPAIGN_UPDATE", campaignId: "{{campaignId}}", deepLink: "/campaigns/{{campaignId}}" } as Prisma.InputJsonValue)
+          imageUrl: p.slug === "cricrumble" ? "{{imageUrl}}" : null,
+          deepLink: p.slug === "cricrumble" ? "/matches/{{matchId}}" : null,
+          dataJson:
+            p.slug === "cricrumble"
+              ? ({
+                  type: "MATCH_START",
+                  matchId: "{{matchId}}",
+                  deepLink: "/matches/{{matchId}}",
+                } as Prisma.InputJsonValue)
               : ({ screen: "home" } as Prisma.InputJsonValue),
-        variables:
-          p.slug === "cricrumble"
-            ? ["teamA", "teamB", "matchTime", "imageUrl", "matchId"]
-            : p.slug === "influventure"
-              ? ["headline", "message", "campaignId"]
+          variables:
+            p.slug === "cricrumble"
+              ? ["teamA", "teamB", "matchTime", "imageUrl", "matchId"]
               : ["firstName", "appName"],
-      },
-    });
+        },
+      });
+    }
 
     if (p.slug === "cricrumble") {
       await prisma.template.create({

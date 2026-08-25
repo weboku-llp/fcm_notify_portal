@@ -57,8 +57,22 @@ export const CREDENTIAL_MISMATCH_ERROR_CODES = new Set<string>([
   "messaging/third-party-auth-error",
 ]);
 
-export function isStaleTokenError(code?: string): boolean {
-  return code !== undefined && STALE_TOKEN_ERROR_CODES.has(code);
+/**
+ * True when FCM says this registration token should be dropped from the audience.
+ * `messaging/invalid-argument` is included only when the message is about the token
+ * itself (not e.g. a bad payload that would fail for every device).
+ */
+export function isStaleTokenError(code?: string, message?: string): boolean {
+  if (code !== undefined && STALE_TOKEN_ERROR_CODES.has(code)) return true;
+  if (code === "messaging/invalid-argument") {
+    const msg = (message ?? "").toLowerCase();
+    return (
+      msg.includes("registration token") ||
+      msg.includes("not a valid fcm") ||
+      msg.includes("invalid registration")
+    );
+  }
+  return false;
 }
 
 export function isCredentialMismatchError(code?: string): boolean {
