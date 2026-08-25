@@ -10,6 +10,7 @@ import { prisma, type Prisma } from "@notif/db";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { INFLUVENTURE_TEMPLATES } from "./influventure-templates";
 
 loadDbEnv();
 
@@ -109,23 +110,23 @@ async function main(): Promise<void> {
     ],
   });
 
-  await prisma.template.create({
-    data: {
-      projectId: project.id,
-      name: "Campaign Update",
-      title: "{{headline}}",
-      body: "{{message}}",
-      deepLink: "/campaigns/{{campaignId}}",
-      dataJson: {
-        type: "CAMPAIGN_UPDATE",
-        campaignId: "{{campaignId}}",
-        deepLink: "/campaigns/{{campaignId}}",
-      } as Prisma.InputJsonValue,
-      variables: ["headline", "message", "campaignId"],
-    },
-  });
+  for (const tpl of INFLUVENTURE_TEMPLATES) {
+    await prisma.template.create({
+      data: {
+        projectId: project.id,
+        name: tpl.name,
+        title: tpl.title,
+        body: tpl.body,
+        imageUrl: tpl.imageUrl ?? null,
+        deepLink: tpl.deepLink ?? null,
+        dataJson: tpl.dataJson as Prisma.InputJsonValue,
+        variables: tpl.variables,
+      },
+    });
+  }
 
   console.log(`Created ${project.name} (${project.slug}) id=${project.id}`);
+  console.log(`  templates=${INFLUVENTURE_TEMPLATES.length}`);
   console.log(`  topic=${project.defaultBroadcastTopic}`);
   console.log(`  tokenSource=${project.tokenSourceApiBaseUrl} key=${exportKey ? "set" : "missing"}`);
   console.log(`  NOTE: placeholder Firebase SA — replace via Manage → Credentials before live sends.`);

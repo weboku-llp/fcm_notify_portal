@@ -6,9 +6,11 @@ import { Copy, RefreshCw, Send, X } from "lucide-react";
 import { useEffect, useId, useMemo, useState } from "react";
 import { NotificationPreview } from "@/components/NotificationPreview";
 import { api, ApiError } from "@/lib/api";
+import { isInfluventure } from "@/lib/brand";
 import { fcmImageWarning } from "@/lib/fcm-image";
+import { templateVarPlaceholder } from "@/lib/template-samples";
 
-export type CampaignReuseIntent = "resend" | "duplicate";
+export type CampaignReuseIntent = "resend" | "duplicate" | "send";
 
 type FormState = {
   title: string;
@@ -97,14 +99,8 @@ function toForm(c: CampaignPublic): FormState {
   };
 }
 
-function varPlaceholder(key: string): string {
-  const today = todayParts();
-  if (key === "dateLabel") return today.dateLabel;
-  if (key === "headline") return "Padikkal ton puts India on top in Colombo";
-  if (key === "summary") return "India 300/5 after Day 1; Australia level series vs Bangladesh";
-  if (key === "imageUrl") return "https://…";
-  if (key === "updateId") return today.updateId;
-  return `Value for ${key}`;
+function varPlaceholder(key: string, projectSlug?: string | null): string {
+  return templateVarPlaceholder(key, { influventure: isInfluventure(projectSlug) });
 }
 
 export function ResendCampaignModal({
@@ -174,17 +170,27 @@ export function ResendCampaignModal({
   }, [busy, onClose]);
 
   const useTemplate = Boolean(template && template.variables.length > 0);
+  /** Template defines its own image (literal or {{imageUrl}}) — keep that field locked. */
+  const imageFromTemplate = Boolean(template?.imageUrl?.trim());
+  const imageEditable = !useTemplate || !imageFromTemplate;
 
   const previewTitle = useTemplate ? renderTpl(template!.title, templateVars) : form.title;
   const previewBody = useTemplate ? renderTpl(template!.body, templateVars) : form.body;
-  const previewImage = useTemplate
-    ? renderTpl(template!.imageUrl ?? "", templateVars)
-    : form.imageUrl;
+  // Prefer template image when present; otherwise allow a freeform CDN override on form.imageUrl.
+  const previewImage =
+    useTemplate && imageFromTemplate
+      ? renderTpl(template!.imageUrl ?? "", templateVars)
+      : form.imageUrl;
   const previewDeepLink = useTemplate
     ? renderTpl(template!.deepLink ?? "", templateVars)
     : form.deepLink;
   const imageUrlCheck = normalizeNotificationImageUrl(previewImage);
-  const imageUrlError = imageUrlCheck.ok ? null : imageUrlCheck.message;
+  const imageUrlError =
+    !previewImage.trim() || /\{\{/.test(previewImage)
+      ? null
+      : imageUrlCheck.ok
+        ? null
+        : imageUrlCheck.message;
 
   const missingVars = useMemo(
     () => (useTemplate ? template!.variables.filter((v) => !(templateVars[v] ?? "").trim()) : []),
@@ -196,6 +202,7 @@ export function ResendCampaignModal({
       ? missingVars.length === 0
       : Boolean(form.title.trim() && form.body.trim())) && !imageUrlError;
   const isDuplicate = intent === "duplicate";
+  const isSendDraft = intent === "send";
 
   async function submit(action: "draft" | "send_now") {
     if (!canSubmit || busy) return;
@@ -212,6 +219,8 @@ export function ResendCampaignModal({
           mode: form.mode,
           templateId: template.id,
           templateVariables: templateVars,
+          // Optional rich-push override when the template has no built-in image.
+          imageUrl: imageUrlCheck.ok ? (imageUrlCheck.imageUrl ?? undefined) : undefined,
           targetTopic: form.mode === "BROADCAST_TOPIC" ? project.defaultBroadcastTopic : undefined,
           refreshFromApiBeforeSend: action === "send_now" && form.mode === "ALL_REGISTERED",
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -253,12 +262,14 @@ export function ResendCampaignModal({
         <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
           <div>
             <h2 id={titleId} className="text-[16px] font-semibold tracking-tight text-ink">
-              {isDuplicate ? "Duplicate update" : "Resend update"}
+              {isDuplicate ? "Duplicate update" : isSendDraft ? "Send draft" : "Resend update"}
             </h2>
             <p className="mt-0.5 text-[12px] text-ink-mute">
               {isDuplicate
                 ? `Edit a copy for ${project.name}. Save as draft or send now — the original row stays unchanged.`
-                : `Edit content, preview on the right, then queue a new send for ${project.name}.`}
+                : isSendDraft
+                  ? `Review this draft for ${project.name}, edit if needed, then send now.`
+                  : `Edit content, preview on the right, then queue a new send for ${project.name}.`}
             </p>
           </div>
           <button type="button" className="btn-secondary h-8 px-2" onClick={onClose} disabled={busy} aria-label="Close">
@@ -303,7 +314,7 @@ export function ResendCampaignModal({
                           className="input h-20"
                           value={templateVars[key] ?? ""}
                           onChange={(e) => setTemplateVars((prev) => ({ ...prev, [key]: e.target.value }))}
-                          placeholder={varPlaceholder(key)}
+                          placeholder={varPlaceholder(key, project.slug)}
                           disabled={busy}
                           required
                         />
@@ -312,7 +323,7 @@ export function ResendCampaignModal({
                           className="input"
                           value={templateVars[key] ?? ""}
                           onChange={(e) => setTemplateVars((prev) => ({ ...prev, [key]: e.target.value }))}
-                          placeholder={varPlaceholder(key)}
+                          placeholder={varPlaceholder(key, project.slug)}
                           disabled={busy}
                           required
                         />
@@ -365,17 +376,24 @@ export function ResendCampaignModal({
             <div>
               <label className="label">Image URL</label>
               <input
-                className="input"
-                value={useTemplate ? previewImage : form.imageUrl}
+                className={`input ${imageUrlError ? "border-red-400 focus:border-red-500" : ""}`}
+                type={imageEditable ? "url" : "text"}
+                value={useTemplate && imageFromTemplate ? previewImage : form.imageUrl}
                 onChange={(e) => setForm((f) => ({ ...f, imageUrl: e.target.value }))}
                 placeholder="https://cdn.example.com/update.jpg"
-                disabled={busy || useTemplate}
-                readOnly={useTemplate}
+                disabled={busy || !imageEditable}
+                readOnly={!imageEditable}
               />
+              {useTemplate && imageFromTemplate ? (
+                <p className="mt-1 text-[11px] text-ink-faint">
+                  From template — set the <code className="text-[11px]">imageUrl</code> variable
+                  above if present.
+                </p>
+              ) : null}
               {imageUrlError ? (
                 <p className="mt-1.5 text-[11px] leading-relaxed text-red-700">{imageUrlError}</p>
               ) : (() => {
-                const warn = fcmImageWarning(useTemplate ? previewImage : form.imageUrl);
+                const warn = fcmImageWarning(previewImage);
                 return warn ? (
                   <p className="mt-1.5 text-[11px] leading-relaxed text-amber-800">
                     {warn} Preview can still show it in the browser even when phones cannot download
@@ -383,11 +401,24 @@ export function ResendCampaignModal({
                   </p>
                 ) : (
                   <p className="mt-1 text-[11px] text-ink-faint">
-                    Public https URL ending in .jpg / .png / .webp. Google thumbnail links will not
-                    show on devices.
+                    Optional. Paste a public https URL ending in .jpg / .png / .webp. Google
+                    thumbnail links will not show on devices.
                   </p>
                 );
               })()}
+              {previewImage.trim() && /^https?:\/\//i.test(previewImage.trim()) ? (
+                <div className="mt-2 overflow-hidden rounded-md border border-line bg-surface-raised">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={previewImage.trim()}
+                    alt="Notification preview"
+                    className="max-h-32 w-full object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                </div>
+              ) : null}
             </div>
             <div>
               <label className="label">Deep link</label>
@@ -486,7 +517,7 @@ export function ResendCampaignModal({
               onClick={() => void submit("send_now")}
             >
               {busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-              {busy ? "Sending…" : "Resend now"}
+              {busy ? "Sending…" : isSendDraft ? "Send now" : "Resend now"}
             </button>
           )}
         </div>

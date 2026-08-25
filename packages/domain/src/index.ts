@@ -2,6 +2,7 @@ export * from "@notif/crypto";
 export * from "./secrets.js";
 export * from "./templates.js";
 export * from "./fcm/index.js";
+export * from "./fcm-token.js";
 export { DomainError } from "./errors.js";
 export {
   toPublicProject,

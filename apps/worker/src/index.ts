@@ -20,6 +20,10 @@ import { env } from "./env.js";
 
 const log = createLogger("worker");
 
+if (/upstash\.io/i.test(env.REDIS_URL) && env.REDIS_URL.startsWith("redis://")) {
+  log.warn("REDIS_URL points at Upstash over plain redis:// — use rediss:// (TLS) or the worker will drop");
+}
+
 const connection = new Redis(env.REDIS_URL, {
   maxRetriesPerRequest: null,
   enableReadyCheck: true,

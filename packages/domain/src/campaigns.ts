@@ -13,7 +13,8 @@ import { DomainError } from "./errors.js";
 import { getProjectOrThrow } from "./projects.js";
 import { projectContext } from "./secrets.js";
 import { tokenWhereFromRules } from "./segments.js";
-import { invalidateTokens } from "./tokens.js";
+import { invalidateTokens, countActiveDevices } from "./tokens.js";
+import { isLikelyFcmToken } from "./fcm-token.js";
 import { projectHasTokenSource, syncProjectTokens } from "./token-source.js";
 import { renderTemplateStrict, TemplateVariableError } from "./templates.js";
 import { createLogger } from "@notif/logger";
@@ -131,10 +132,17 @@ async function resolveContent(
         tpl.variables,
         input.templateVariables ?? {},
       );
+      // Prefer an explicit compose-time image override when the template has no
+      // image (or when the operator pastes a CDN URL on top of the template).
+      const fromTemplate = assertNotificationImageUrl(rendered.imageUrl);
+      const fromInput =
+        input.imageUrl != null && String(input.imageUrl).trim()
+          ? assertNotificationImageUrl(input.imageUrl)
+          : null;
       return {
         title: rendered.title,
         body: rendered.body,
-        imageUrl: assertNotificationImageUrl(rendered.imageUrl),
+        imageUrl: fromInput ?? fromTemplate,
         deepLink: rendered.deepLink ?? null,
         dataJson: rendered.dataJson ?? {},
         templateId: tpl.id,
@@ -159,27 +167,33 @@ async function resolveContent(
 
 async function estimateForCampaign(project: Project, input: CreateCampaignInput): Promise<number | null> {
   if (input.mode === "BROADCAST_TOPIC") {
-    // Proxy: active portal-cache devices (Firebase does not return topic size).
-    return prisma.deviceToken.count({ where: { projectId: project.id, isActive: true } });
+    // Proxy: active portal-cache devices that look like real FCM tokens.
+    return countActiveDevices(project.id);
   }
   if (input.mode === "ALL_REGISTERED") {
-    return prisma.deviceToken.count({ where: { projectId: project.id, isActive: true } });
+    return countActiveDevices(project.id);
   }
-  if (input.mode === "SPECIFIC_TOKENS") return input.targetTokens?.length ?? 0;
+  if (input.mode === "SPECIFIC_TOKENS") {
+    return (input.targetTokens ?? []).filter((t) => isLikelyFcmToken(t)).length;
+  }
   if (input.mode === "SELECTED_USERS") {
     const ids = input.targetUserIds ?? [];
     if (ids.length === 0) return 0;
-    return prisma.deviceToken.count({
+    const rows = await prisma.deviceToken.findMany({
       where: { projectId: project.id, isActive: true, userId: { in: ids } },
+      select: { token: true },
     });
+    return rows.filter((r) => isLikelyFcmToken(r.token)).length;
   }
   if (input.mode === "SEGMENT" && input.segmentId) {
     const seg = await prisma.segment.findFirst({ where: { id: input.segmentId, projectId: project.id } });
     if (!seg) return 0;
     const rules = SegmentRules.parse(seg.rules);
-    return prisma.deviceToken.count({
+    const rows = await prisma.deviceToken.findMany({
       where: { ...tokenWhereFromRules(project.id, rules), isActive: true },
+      select: { token: true },
     });
+    return rows.filter((r) => isLikelyFcmToken(r.token)).length;
   }
   return null;
 }
@@ -357,34 +371,43 @@ export async function cancelCampaign(id: string): Promise<CampaignPublic> {
 }
 
 async function resolveTokens(project: Project, campaign: Campaign): Promise<string[]> {
-  if (campaign.mode === "SPECIFIC_TOKENS") return campaign.targetTokens;
-  if (campaign.mode === "ALL_REGISTERED") {
-    const tokens = await prisma.deviceToken.findMany({
+  let tokens: string[] = [];
+  if (campaign.mode === "SPECIFIC_TOKENS") {
+    tokens = campaign.targetTokens;
+  } else if (campaign.mode === "ALL_REGISTERED") {
+    const rows = await prisma.deviceToken.findMany({
       where: { projectId: project.id, isActive: true },
       select: { token: true },
     });
-    return tokens.map((t) => t.token);
-  }
-  if (campaign.mode === "SELECTED_USERS") {
+    tokens = rows.map((t) => t.token);
+  } else if (campaign.mode === "SELECTED_USERS") {
     if (campaign.targetUserIds.length === 0) return [];
-    const tokens = await prisma.deviceToken.findMany({
+    const rows = await prisma.deviceToken.findMany({
       where: { projectId: project.id, isActive: true, userId: { in: campaign.targetUserIds } },
       select: { token: true },
     });
-    return tokens.map((t) => t.token);
-  }
-  if (campaign.mode === "SEGMENT") {
+    tokens = rows.map((t) => t.token);
+  } else if (campaign.mode === "SEGMENT") {
     if (!campaign.segmentId) return [];
     const seg = await prisma.segment.findFirst({ where: { id: campaign.segmentId, projectId: project.id } });
     if (!seg) return [];
     const rules = SegmentRules.parse(seg.rules);
-    const tokens = await prisma.deviceToken.findMany({
+    const rows = await prisma.deviceToken.findMany({
       where: { ...tokenWhereFromRules(project.id, rules), isActive: true },
       select: { token: true },
     });
-    return tokens.map((t) => t.token);
+    tokens = rows.map((t) => t.token);
+  } else {
+    return [];
   }
-  return [];
+
+  const valid = tokens.filter((t) => isLikelyFcmToken(t));
+  const junk = tokens.filter((t) => !isLikelyFcmToken(t));
+  if (junk.length > 0 && campaign.mode !== "SPECIFIC_TOKENS") {
+    await invalidateTokens(project.id, junk, "not-a-valid-fcm-registration-token");
+    log.info({ projectId: project.id, pruned: junk.length }, "dropped non-FCM tokens before send");
+  }
+  return valid;
 }
 
 /**
@@ -505,7 +528,7 @@ export async function runCampaign(campaignId: string): Promise<CampaignPublic> {
     const result = await sender.sendToTokens(ctx, tokens, message);
 
     const staleTokens = result.results
-      .filter((r) => !r.success && isStaleTokenError(r.errorCode))
+      .filter((r) => !r.success && isStaleTokenError(r.errorCode, r.error))
       .map((r) => r.token);
     if (staleTokens.length > 0) {
       const pruned = await invalidateTokens(project.id, staleTokens, "registration-token-not-registered");
@@ -577,7 +600,7 @@ async function recordDeliveries(
   const data = results.map((r) => ({
     campaignId,
     tokenId: idByToken.get(r.token) ?? null,
-    status: (r.success ? "SENT" : isStaleTokenError(r.errorCode) ? "STALE" : "FAILED") as
+    status: (r.success ? "SENT" : isStaleTokenError(r.errorCode, r.error) ? "STALE" : "FAILED") as
       | "SENT"
       | "FAILED"
       | "STALE",
@@ -603,7 +626,7 @@ export async function testSend(projectId: string, input: TestSendInput): Promise
     androidChannelId: project.androidChannelId,
   });
 
-  if (!res.success && isStaleTokenError(res.errorCode)) {
+  if (!res.success && isStaleTokenError(res.errorCode, res.error)) {
     await invalidateTokens(project.id, [input.token], res.errorCode ?? "invalid-registration-token");
   }
   if (!res.success && isCredentialMismatchError(res.errorCode)) {

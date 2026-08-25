@@ -6,6 +6,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { NotificationPreview } from "@/components/NotificationPreview";
 import { useProjects } from "@/components/ProjectContext";
 import { api, ApiError } from "@/lib/api";
+import { isInfluventure } from "@/lib/brand";
+import { INFLUVENTURE_SAMPLE_VALUES, TEMPLATE_SAMPLE_VALUES } from "@/lib/template-samples";
 
 function render(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, k: string) => vars[k] ?? `{{${k}}}`);
@@ -18,23 +20,6 @@ function extractVars(...parts: string[]): string[] {
   }
   return [...set];
 }
-
-/** Realistic sample values so the phone preview reads like a real push. */
-const SAMPLE_VALUES: Record<string, string> = {
-  dateLabel: "24 Aug",
-  headline: "Padikkal ton puts India on top in Colombo",
-  summary: "India 300/5 after Day 1; Australia level series vs Bangladesh",
-  imageUrl: "https://images.unsplash.com/photo-1531415079815-fe2729c43362?w=800&q=80",
-  updateId: "upd-20260824",
-  teamA: "India",
-  teamB: "Australia",
-  matchTime: "7:30 PM",
-  matchId: "m42",
-  firstName: "Alex",
-  appName: "CricRumble",
-  message: "Your campaign is live — open the app for details.",
-  campaignId: "cmp-9",
-};
 
 function emptyForm() {
   return {
@@ -69,10 +54,10 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
     () => extractVars(form.title, form.body, form.imageUrl, form.deepLink, form.dataJson),
     [form],
   );
-  const sampleVars = useMemo(
-    () => Object.fromEntries(vars.map((v) => [v, SAMPLE_VALUES[v] ?? `<${v}>`])),
-    [vars],
-  );
+  const sampleVars = useMemo(() => {
+    const map = isInfluventure(selected?.slug) ? INFLUVENTURE_SAMPLE_VALUES : TEMPLATE_SAMPLE_VALUES;
+    return Object.fromEntries(vars.map((v) => [v, map[v] ?? `<${v}>`]));
+  }, [vars, selected?.slug]);
 
   const previewTitle = render(form.title || "Notification title", sampleVars);
   const previewBody = render(form.body || "Notification body will appear here.", sampleVars);
@@ -220,7 +205,7 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
                     value={form.name}
                     onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                     required
-                    placeholder="Daily Update"
+                    placeholder={isInfluventure(selected?.slug) ? "New Campaign Invite" : "Daily Update"}
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -230,7 +215,11 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
                     value={form.title}
                     onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
                     required
-                    placeholder="Daily Update · {{dateLabel}}"
+                    placeholder={
+                      isInfluventure(selected?.slug)
+                        ? "{{brandName}} invited you"
+                        : "Daily Update · {{dateLabel}}"
+                    }
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -240,7 +229,11 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
                     value={form.body}
                     onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))}
                     required
-                    placeholder="{{headline}} — {{summary}}"
+                    placeholder={
+                      isInfluventure(selected?.slug)
+                        ? "Join {{campaignName}} — {{deliverable}}. Tap to review the brief."
+                        : "{{headline}} — {{summary}}"
+                    }
                   />
                 </div>
                 <div>
@@ -258,7 +251,11 @@ export function ProjectTemplatesPanel({ projectId }: { projectId: string }) {
                     className="input"
                     value={form.deepLink}
                     onChange={(e) => setForm((f) => ({ ...f, deepLink: e.target.value }))}
-                    placeholder="/updates/{{updateId}}"
+                    placeholder={
+                      isInfluventure(selected?.slug)
+                        ? "/campaigns/{{campaignId}}"
+                        : "/updates/{{updateId}}"
+                    }
                   />
                 </div>
                 <div className="md:col-span-2">
