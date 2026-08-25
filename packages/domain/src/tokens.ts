@@ -8,6 +8,10 @@ import { prisma, type DeviceToken, type NotificationPermission, type Platform, t
 import { createHash } from "node:crypto";
 import { writeAuditLog } from "./audit.js";
 import { DomainError } from "./errors.js";
+import { isLikelyFcmToken } from "./fcm-token.js";
+import { createLogger } from "@notif/logger";
+
+const log = createLogger("tokens");
 
 export function hashRegistrationSecret(secret: string): string {
   return createHash("sha256").update(secret, "utf8").digest("hex");
@@ -53,6 +57,13 @@ function clientPermissionToDb(
 export async function registerToken(projectId: string, input: RegisterTokenInput): Promise<DeviceTokenPublic> {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new DomainError(`Project ${projectId} not found`, "NOT_FOUND", 404);
+  if (!isLikelyFcmToken(input.token)) {
+    throw new DomainError(
+      "token does not look like a valid FCM registration token",
+      "INVALID_FCM_TOKEN",
+      400,
+    );
+  }
 
   const token = await prisma.deviceToken.upsert({
     where: { projectKey_token: { projectKey: project.slug, token: input.token } },
@@ -114,6 +125,13 @@ export async function registerDevice(
     throw new DomainError(
       "firebaseAppId does not match the configured project app id",
       "FIREBASE_APP_MISMATCH",
+      400,
+    );
+  }
+  if (!isLikelyFcmToken(input.token)) {
+    throw new DomainError(
+      "token does not look like a valid FCM registration token",
+      "INVALID_FCM_TOKEN",
       400,
     );
   }
@@ -209,7 +227,40 @@ export async function listTokens(
 }
 
 export async function countActiveDevices(projectId: string): Promise<number> {
-  return prisma.deviceToken.count({ where: { projectId, isActive: true } });
+  // Only count tokens that look like real FCM registration tokens. Seed / probe
+  // strings (tok-…, short junk) stay in the DB as inactive or are excluded here.
+  const rows = await prisma.deviceToken.findMany({
+    where: { projectId, isActive: true },
+    select: { token: true },
+  });
+  return rows.filter((r) => isLikelyFcmToken(r.token)).length;
+}
+
+/**
+ * Mark active rows that are clearly not FCM registration tokens as inactive.
+ * Safe to run for one project or every project.
+ */
+export async function deactivateNonFcmTokens(projectId?: string): Promise<number> {
+  const rows = await prisma.deviceToken.findMany({
+    where: { isActive: true, ...(projectId ? { projectId } : {}) },
+    select: { id: true, projectId: true, token: true },
+  });
+  const junk = rows.filter((r) => !isLikelyFcmToken(r.token));
+  if (junk.length === 0) return 0;
+
+  const byProject = new Map<string, string[]>();
+  for (const row of junk) {
+    const list = byProject.get(row.projectId) ?? [];
+    list.push(row.token);
+    byProject.set(row.projectId, list);
+  }
+
+  let total = 0;
+  for (const [pid, tokens] of byProject) {
+    total += await invalidateTokens(pid, tokens, "not-a-valid-fcm-registration-token");
+  }
+  log.info({ deactivated: total, projectId: projectId ?? "all" }, "deactivated non-FCM tokens");
+  return total;
 }
 
 /** Mark permanently invalid / refreshed tokens inactive (do not hard-delete). */
@@ -302,15 +353,20 @@ export async function estimateAudience(
     return { estimatedRecipients: await countActiveDevices(projectId), coverageNote };
   }
   if (query.mode === "SPECIFIC_TOKENS") {
-    return { estimatedRecipients: query.targetTokens?.length ?? 0, coverageNote };
+    const n = (query.targetTokens ?? []).filter((t) => isLikelyFcmToken(t)).length;
+    return { estimatedRecipients: n, coverageNote };
   }
   if (query.mode === "SELECTED_USERS") {
     const ids = query.targetUserIds ?? [];
     if (ids.length === 0) return { estimatedRecipients: 0, coverageNote };
-    const count = await prisma.deviceToken.count({
+    const rows = await prisma.deviceToken.findMany({
       where: { projectId, isActive: true, userId: { in: ids } },
+      select: { token: true },
     });
-    return { estimatedRecipients: count, coverageNote };
+    return {
+      estimatedRecipients: rows.filter((r) => isLikelyFcmToken(r.token)).length,
+      coverageNote,
+    };
   }
   if (query.mode === "SEGMENT" && query.segmentId) {
     const seg = await prisma.segment.findFirst({ where: { id: query.segmentId, projectId } });
@@ -318,10 +374,14 @@ export async function estimateAudience(
     const { tokenWhereFromRules } = await import("./segments.js");
     const { SegmentRules } = await import("@notif/contracts");
     const rules = SegmentRules.parse(seg.rules);
-    const count = await prisma.deviceToken.count({
+    const rows = await prisma.deviceToken.findMany({
       where: { ...tokenWhereFromRules(projectId, rules), isActive: true },
+      select: { token: true },
     });
-    return { estimatedRecipients: count, coverageNote };
+    return {
+      estimatedRecipients: rows.filter((r) => isLikelyFcmToken(r.token)).length,
+      coverageNote,
+    };
   }
   return { estimatedRecipients: 0, coverageNote };
 }

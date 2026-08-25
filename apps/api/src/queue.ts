@@ -8,6 +8,10 @@ const log = createLogger("api:queue");
 
 function createRedis(): Redis {
   const url = env.REDIS_URL;
+  // Upstash (and most managed Redis) require TLS — use rediss:// not redis://.
+  if (/upstash\.io/i.test(url) && url.startsWith("redis://")) {
+    log.warn("REDIS_URL points at Upstash over plain redis:// — use rediss:// (TLS) or queue will drop");
+  }
   const redis = new Redis(url, {
     maxRetriesPerRequest: null,
     enableReadyCheck: true,

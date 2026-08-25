@@ -11,6 +11,7 @@ import { createLogger } from "@notif/logger";
 import { writeAuditLog } from "./audit.js";
 import { DomainError } from "./errors.js";
 import { getProjectOrThrow } from "./projects.js";
+import { isLikelyFcmToken } from "./fcm-token.js";
 
 const log = createLogger("token-source");
 
@@ -44,17 +45,6 @@ function toPlatform(p: ExternalDeviceToken["platform"]): Platform {
     default:
       return "ANDROID";
   }
-}
-
-/**
- * Skip seed / probe strings that are not real FCM registration tokens.
- * Real Android/iOS tokens are long and typically look like `…:APA91b…`.
- */
-function isLikelyFcmToken(token: string): boolean {
-  const t = token.trim();
-  if (t.length < 80) return false;
-  if (!t.includes(":")) return false;
-  return true;
 }
 
 export function projectHasTokenSource(project: Project): boolean {
