@@ -9,6 +9,8 @@ import { NotificationPreview } from "@/components/NotificationPreview";
 import { useProjects } from "@/components/ProjectContext";
 import { api, ApiError } from "@/lib/api";
 import { fcmImageWarning } from "@/lib/fcm-image";
+import { isInfluventure } from "@/lib/brand";
+import { templateVarPlaceholder } from "@/lib/template-samples";
 
 type UiTarget = "ALL_REGISTERED" | "PROJECT_TOPIC" | "TEST_DEVICE";
 
@@ -121,8 +123,19 @@ export default function NewCampaignPage() {
   const previewBody = activeTemplate ? renderTpl(body, templateVars) : body;
   const previewImage = activeTemplate ? renderTpl(imageUrl, templateVars) : imageUrl;
   const previewDeepLink = activeTemplate ? renderTpl(deepLink, templateVars) : deepLink;
+  // Template expressions like {{imageUrl}} are resolved via variables; only
+  // validate the final preview URL (or a freeform override when the template
+  // has no image of its own).
   const imageUrlCheck = normalizeNotificationImageUrl(previewImage);
-  const imageUrlError = imageUrlCheck.ok ? null : imageUrlCheck.message;
+  const imageUrlError =
+    !previewImage.trim() || /\{\{/.test(previewImage)
+      ? null
+      : imageUrlCheck.ok
+        ? null
+        : imageUrlCheck.message;
+  /** When the template defines imageUrl (literal or {{var}}), keep it locked. */
+  const imageFromTemplate = Boolean(activeTemplate?.imageUrl?.trim());
+  const imageEditable = !imageFromTemplate;
 
   const missingVars = activeTemplate
     ? activeTemplate.variables.filter((v) => !(templateVars[v] ?? "").trim())
@@ -159,7 +172,9 @@ export default function NewCampaignPage() {
       templateVariables: templateId ? templateVars : undefined,
       title: templateId ? undefined : title,
       body: templateId ? undefined : body,
-      imageUrl: templateId ? undefined : imageUrlCheck.ok ? (imageUrlCheck.imageUrl ?? undefined) : undefined,
+      // Optional rich-push image: send when the operator set a concrete URL
+      // (including override on templates that have no built-in image).
+      imageUrl: imageUrlCheck.ok ? (imageUrlCheck.imageUrl ?? undefined) : undefined,
       deepLink: templateId ? undefined : deepLink || undefined,
       dataJson: templateId ? undefined : parseDataJson(),
       targetTopic: mode === "BROADCAST_TOPIC" ? selected!.defaultBroadcastTopic : undefined,
@@ -419,21 +434,20 @@ export default function NewCampaignPage() {
                       className="input"
                       value={templateVars[key] ?? ""}
                       onChange={(e) => setTemplateVars((prev) => ({ ...prev, [key]: e.target.value }))}
-                      placeholder={
-                        key === "dateLabel"
-                          ? todayParts().dateLabel
-                          : key === "headline"
-                            ? "Padikkal ton puts India on top in Colombo"
-                            : key === "summary"
-                              ? "India 300/5 after Day 1; Australia level series vs Bangladesh"
-                              : key === "imageUrl"
-                                ? "https://…"
-                                : key === "updateId"
-                                  ? todayParts().updateId
-                                  : `Value for ${key}`
-                      }
+                      placeholder={templateVarPlaceholder(key, {
+                        influventure: isInfluventure(selected.slug),
+                      })}
                       required
                     />
+                    {key === "campaignId" && isInfluventure(selected.slug) ? (
+                      <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                        Deep link opens{" "}
+                        <code className="rounded bg-white px-1 text-[11px]">
+                          /campaigns/{(templateVars.campaignId || "…").trim() || "…"}
+                        </code>{" "}
+                        in the Influventure app.
+                      </p>
+                    ) : null}
                     {key === "updateId" ? (
                       <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
                         Needed so the app can open the matching article when someone taps the
@@ -490,13 +504,19 @@ export default function NewCampaignPage() {
               <label className="label">Image URL</label>
               <input
                 className={`input ${imageUrlError ? "border-red-400 focus:border-red-500 focus:ring-red-200" : ""}`}
-                type={activeTemplate ? "text" : "url"}
+                type={imageEditable ? "url" : "text"}
                 value={imageUrl}
                 onChange={(e) => setImageUrl(e.target.value)}
                 placeholder="https://cdn.example.com/notification-image.png"
-                disabled={Boolean(activeTemplate)}
-                readOnly={Boolean(activeTemplate)}
+                disabled={!imageEditable}
+                readOnly={!imageEditable}
               />
+              {imageFromTemplate ? (
+                <p className="mt-1 text-xs text-slate-500">
+                  From template — set the <code className="text-[11px]">imageUrl</code> variable above,
+                  or switch to “Write inline” to paste a URL here.
+                </p>
+              ) : null}
               {imageUrlError ? (
                 <p className="mt-1.5 text-xs leading-relaxed text-red-700">{imageUrlError}</p>
               ) : (() => {
@@ -507,8 +527,8 @@ export default function NewCampaignPage() {
                   </p>
                 ) : (
                   <p className="mt-1 text-xs text-slate-500">
-                    Optional. Public https URL ending in .jpg / .png / .webp — Google thumbnail /
-                    gstatic links usually fail on devices.
+                    Optional. Paste a public https URL ending in .jpg / .png / .webp — Google
+                    thumbnail / gstatic links usually fail on devices.
                   </p>
                 );
               })()}
@@ -532,22 +552,21 @@ export default function NewCampaignPage() {
                 className="input"
                 value={deepLink}
                 onChange={(e) => setDeepLink(e.target.value)}
-                placeholder={`/updates/${todayParts().updateId}`}
+                placeholder={
+                  isInfluventure(selected.slug)
+                    ? "/campaigns/…"
+                    : `/updates/${todayParts().updateId}`
+                }
                 disabled={Boolean(activeTemplate)}
                 readOnly={Boolean(activeTemplate)}
               />
               {!activeTemplate ? (
                 <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
-                  Needed so the app opens the right screen when someone taps the notification.
-                  For Daily Updates use{" "}
-                  <code className="rounded bg-slate-100 px-1 text-[11px]">
-                    /updates/{todayParts().updateId}
-                  </code>
-                  .
+                  Opens this path in the app when someone taps the notification.
                 </p>
               ) : (
                 <p className="mt-1 text-xs text-slate-500">
-                  From template — uses your <code className="text-[11px]">updateId</code> variable.
+                  From template — filled from your template variables when you send.
                 </p>
               )}
             </div>
